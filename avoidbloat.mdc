@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Avoid unnecessary code and new libaries whenever possible. Always strive for the simplest solution that uses vanilla code (ie, vanill JS in the frontend) or uses libraries already in the project. Strive for as lean a code base as possible.

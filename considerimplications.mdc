@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Before making changes to code, do a review to find any implications of the change and address them to avoid unintended consequences or breaking functionality.

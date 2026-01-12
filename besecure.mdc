@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Never reveal API keys and other secure information in places that might be revealed to the public, like in console or troubleshooting logs.

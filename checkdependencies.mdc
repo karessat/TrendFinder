@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Avoid making unnecessary changes to the code base. When changes are made, check to make sure the changes don't break any existing functionality.
