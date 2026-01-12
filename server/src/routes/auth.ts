@@ -1,8 +1,17 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
-import { createUser, authenticateUser, generateToken, getUserByEmail } from '../services/authService';
+import { 
+  createUser, 
+  authenticateUser, 
+  generateToken, 
+  getUserByEmail,
+  createPasswordResetToken,
+  verifyPasswordResetToken,
+  updateUserPassword
+} from '../services/authService';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import { logger } from '../config/logger';
+import { sendPasswordResetEmail } from '../services/emailService';
 
 const router = Router();
 
@@ -132,6 +141,90 @@ router.get('/me', requireAuth, (req: AuthRequest, res: Response) => {
       role: req.user!.role
     }
   });
+});
+
+// Forgot password - request password reset
+const forgotPasswordSchema = z.object({
+  email: z.string().email('Invalid email address')
+});
+
+router.post('/forgot-password', async (req, res: Response) => {
+  try {
+    const validated = forgotPasswordSchema.parse(req.body);
+    
+    // Find user by email
+    const user = getUserByEmail(validated.email);
+    
+    // Always return success (don't reveal if email exists)
+    // This prevents email enumeration attacks
+    if (user) {
+      try {
+        const resetToken = await createPasswordResetToken(user.id);
+        await sendPasswordResetEmail(user.email, resetToken, req.body.resetUrl);
+        logger.info({ userId: user.id, email: user.email }, 'Password reset email sent');
+      } catch (error) {
+        logger.error({ error, userId: user.id }, 'Failed to send password reset email');
+        // Still return success to prevent email enumeration
+      }
+    } else {
+      logger.warn({ email: validated.email }, 'Password reset requested for non-existent user');
+    }
+    
+    // Always return the same response
+    res.json({ 
+      message: 'If an account with that email exists, a password reset link has been sent.' 
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({
+        error: 'Validation failed',
+        details: error.errors.map(e => e.message).join(', ')
+      });
+    }
+    
+    logger.error({ error }, 'Forgot password request failed');
+    res.status(500).json({ error: 'Failed to process password reset request' });
+  }
+});
+
+// Reset password - use token to set new password
+const resetPasswordSchema = z.object({
+  token: z.string().min(1, 'Reset token is required'),
+  password: z.string().min(8, 'Password must be at least 8 characters')
+});
+
+router.post('/reset-password', async (req, res: Response) => {
+  try {
+    const validated = resetPasswordSchema.parse(req.body);
+    
+    // Verify token
+    const userId = await verifyPasswordResetToken(validated.token);
+    
+    if (!userId) {
+      return res.status(400).json({ 
+        error: 'Invalid or expired reset token. Please request a new password reset.' 
+      });
+    }
+    
+    // Update password
+    await updateUserPassword(userId, validated.password);
+    
+    logger.info({ userId }, 'Password reset completed');
+    
+    res.json({ 
+      message: 'Password has been reset successfully. You can now log in with your new password.' 
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({
+        error: 'Validation failed',
+        details: error.errors.map(e => e.message).join(', ')
+      });
+    }
+    
+    logger.error({ error }, 'Password reset failed');
+    res.status(500).json({ error: 'Failed to reset password' });
+  }
 });
 
 export default router;

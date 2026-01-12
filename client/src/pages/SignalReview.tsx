@@ -3,14 +3,16 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useSignals } from '../hooks/useSignals';
 import { useTrends } from '../hooks/useTrends';
 import { useProcessingStatus } from '../hooks/useProcessingStatus';
+import { trendsApi } from '../services/api';
 import { SimilarSignalsList } from '../components/signals/SimilarSignalsList';
 import { ArchiveSignalModal } from '../components/signals/ArchiveSignalModal';
+import { TrendEditModal } from '../components/trends/TrendEditModal';
 import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
 import { ErrorMessage } from '../components/common/ErrorMessage';
 import { Spinner } from '../components/common/Spinner';
 import { EmptyState } from '../components/common/EmptyState';
-import { Signal } from '../types';
+import { Signal, Trend, UpdateTrendRequest } from '../types';
 import { Layout } from '../components/common/Layout';
 
 export default function SignalReview() {
@@ -19,6 +21,7 @@ export default function SignalReview() {
   const [selectedSignalIds, setSelectedSignalIds] = useState<string[]>([]);
   const [isCreatingTrend, setIsCreatingTrend] = useState(false);
   const [archivingSignal, setArchivingSignal] = useState<Signal | null>(null);
+  const [editingTrend, setEditingTrend] = useState<Trend | null>(null);
 
   const {
     nextUnassigned,
@@ -30,6 +33,8 @@ export default function SignalReview() {
 
   const {
     createTrend,
+    updateTrend,
+    regenerateSummary,
     isLoading: trendsLoading
   } = useTrends(projectId || '');
 
@@ -42,14 +47,61 @@ export default function SignalReview() {
       // If no status yet, wait for it to load
       return false;
     }
-    // Processing is complete if status is 'complete' or 'error'
-    return processingStatus.status === 'complete' || processingStatus.status === 'error';
+    
+    // Check explicit status first
+    if (processingStatus.status === 'complete' || processingStatus.status === 'error') {
+      return true;
+    }
+    
+    // Also check if all phases are actually complete (handles cases where status wasn't updated)
+    // This fixes the bug where status might be 'claude_verification' but all work is done
+    if (processingStatus.totalSignals > 0) {
+      const allEmbeddingsDone = processingStatus.embeddingsComplete >= processingStatus.totalSignals;
+      const allSimilaritiesDone = processingStatus.embeddingSimilaritiesComplete >= processingStatus.totalSignals;
+      const allVerificationsDone = processingStatus.claudeVerificationsComplete >= processingStatus.totalSignals;
+      
+      // If all phases are complete, allow access even if status field says otherwise
+      if (allEmbeddingsDone && allSimilaritiesDone && allVerificationsDone) {
+        return true;
+      }
+    }
+    
+    return false;
   };
+
+  // Load next unassigned signal when ready
+  useEffect(() => {
+    if (projectId && processingStatus && !processingStatusLoading) {
+      // Check if processing is complete
+      let isComplete = processingStatus.status === 'complete' || processingStatus.status === 'error';
+      if (!isComplete && processingStatus.totalSignals > 0) {
+        const allEmbeddingsDone = processingStatus.embeddingsComplete >= processingStatus.totalSignals;
+        const allSimilaritiesDone = processingStatus.embeddingSimilaritiesComplete >= processingStatus.totalSignals;
+        const allVerificationsDone = processingStatus.claudeVerificationsComplete >= processingStatus.totalSignals;
+        isComplete = allEmbeddingsDone && allSimilaritiesDone && allVerificationsDone;
+      }
+      
+      if (isComplete) {
+        console.log('SignalReview - projectId from useParams:', projectId, 'Length:', projectId.length);
+        loadNextUnassigned();
+      }
+    }
+  }, [projectId, processingStatus, processingStatusLoading, loadNextUnassigned]);
 
   // Redirect if processing is not complete
   useEffect(() => {
     if (projectId && !processingStatusLoading && processingStatus) {
-      const isComplete = processingStatus.status === 'complete' || processingStatus.status === 'error';
+      // Use the same logic as isProcessingComplete
+      let isComplete = processingStatus.status === 'complete' || processingStatus.status === 'error';
+      
+      // Also check if all phases are actually complete
+      if (!isComplete && processingStatus.totalSignals > 0) {
+        const allEmbeddingsDone = processingStatus.embeddingsComplete >= processingStatus.totalSignals;
+        const allSimilaritiesDone = processingStatus.embeddingSimilaritiesComplete >= processingStatus.totalSignals;
+        const allVerificationsDone = processingStatus.claudeVerificationsComplete >= processingStatus.totalSignals;
+        isComplete = allEmbeddingsDone && allSimilaritiesDone && allVerificationsDone;
+      }
+      
       if (!isComplete) {
         // Redirect to project dashboard with a message
         navigate(`/projects/${projectId}`, { 
@@ -78,13 +130,6 @@ export default function SignalReview() {
     );
   }
 
-  useEffect(() => {
-    if (projectId && isProcessingComplete()) {
-      console.log('SignalReview - projectId from useParams:', projectId, 'Length:', projectId.length);
-      loadNextUnassigned();
-    }
-  }, [projectId, loadNextUnassigned]);
-
   const handleCreateTrend = async () => {
     if (!nextUnassigned?.signal || selectedSignalIds.length === 0) return;
 
@@ -94,11 +139,12 @@ export default function SignalReview() {
       const trend = await createTrend({ signalIds: allSignalIds });
       if (trend) {
         setSelectedSignalIds([]);
-        loadNextUnassigned();
+        setIsCreatingTrend(false);
+        // Open the edit modal with the newly created trend
+        setEditingTrend(trend);
       }
     } catch (err) {
       console.error('Failed to create trend:', err);
-    } finally {
       setIsCreatingTrend(false);
     }
   };
@@ -111,13 +157,48 @@ export default function SignalReview() {
       const trend = await createTrend({ signalIds: [nextUnassigned.signal.id] });
       if (trend) {
         setSelectedSignalIds([]);
-        loadNextUnassigned();
+        setIsCreatingTrend(false);
+        // Open the edit modal with the newly created trend
+        setEditingTrend(trend);
       }
     } catch (err) {
       console.error('Failed to create single-signal trend:', err);
-    } finally {
       setIsCreatingTrend(false);
     }
+  };
+
+  const handleSaveTrend = async (id: string, data: UpdateTrendRequest) => {
+    await updateTrend(id, data);
+    setEditingTrend(null);
+    // After saving, load the next unassigned signal
+    loadNextUnassigned();
+  };
+
+  const handleRegenerateSummary = async (id: string) => {
+    if (!projectId || !editingTrend) return;
+    
+    try {
+      // Call the API to regenerate and get the updated trend
+      const response = await trendsApi.regenerateSummary(projectId, id);
+      // Update the editing trend with the new title and summary
+      setEditingTrend({ 
+        ...editingTrend, 
+        title: response.data.trend.title || null,
+        summary: response.data.trend.summary 
+      });
+      // Also call the hook to keep the trends list in sync (but it will make another API call)
+      // We could optimize this later by passing the updated trend to the hook
+      await regenerateSummary(id);
+    } catch (err) {
+      console.error('Failed to regenerate summary:', err);
+      throw err;
+    }
+  };
+
+  const handleCloseTrendModal = () => {
+    setEditingTrend(null);
+    // After closing, load the next unassigned signal
+    loadNextUnassigned();
   };
 
   const handleSkip = () => {
@@ -341,6 +422,14 @@ export default function SignalReview() {
           isOpen={!!archivingSignal}
           onClose={() => setArchivingSignal(null)}
           onArchive={handleArchiveConfirm}
+        />
+
+        <TrendEditModal
+          trend={editingTrend}
+          isOpen={!!editingTrend}
+          onClose={handleCloseTrendModal}
+          onSave={handleSaveTrend}
+          onRegenerateSummary={handleRegenerateSummary}
         />
       </div>
     </Layout>

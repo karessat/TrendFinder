@@ -20,6 +20,9 @@ export function SimilarSignalsList({
     ? signals
     : signals.filter(s => s.status === 'Pending');
 
+  // Sort by score in descending order (highest similarity first)
+  const sortedSignals = [...filteredSignals].sort((a, b) => b.score - a.score);
+
   // Claude scores are on a 1-10 scale, convert to percentage (10 = 100%)
   const scoreToPercent = (score: number): number => {
     // If score is > 1, it's a Claude score (1-10), convert to percentage
@@ -68,7 +71,7 @@ export function SimilarSignalsList({
       </div>
 
       <div className="space-y-2 max-h-96 overflow-y-auto">
-        {filteredSignals.map((signal) => (
+        {sortedSignals.map((signal) => (
           <div
             key={signal.id}
             className={`p-3 rounded-lg border-2 transition-all ${

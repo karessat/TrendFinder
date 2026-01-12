@@ -48,12 +48,18 @@ router.get('/', (req: AuthRequest, res: Response) => {
         const projectMeta = db.prepare("SELECT value FROM project_meta WHERE key = 'name'").get() as { value: string } | undefined;
         const createdAt = db.prepare("SELECT value FROM project_meta WHERE key = 'created_at'").get() as { value: string } | undefined;
         
+        // Transform status for display: 'complete' -> 'Processed'
+        let displayStatus = processingStatus?.status || 'pending';
+        if (displayStatus === 'complete') {
+          displayStatus = 'Processed';
+        }
+        
         return {
           id,
           name: projectMeta?.value || 'Unnamed Project',
           signalCount: signalCount.count,
           trendCount: trendCount.count,
-          processingStatus: processingStatus?.status || 'pending',
+          processingStatus: displayStatus,
           createdAt: createdAt?.value || new Date().toISOString()
         };
       } finally {

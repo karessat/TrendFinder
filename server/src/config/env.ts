@@ -21,6 +21,7 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   MAX_FILE_SIZE_MB: z.coerce.number().default(10),
   CLAUDE_RATE_LIMIT_DELAY_MS: z.coerce.number().default(150),
+  PROCESSING_CONCURRENCY: z.coerce.number().default(5).describe('Number of parallel workers for processing (embeddings and Claude verification)'),
   ALLOWED_ORIGINS: z.string().default('http://localhost:5174'),
   JWT_SECRET: z.string().default('change-me-in-production'),
   JWT_EXPIRY: z.string().default('7d')

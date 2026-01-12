@@ -79,7 +79,11 @@ export function useTrends(projectId: string) {
     setError(null);
     try {
       const response = await trendsApi.regenerateSummary(projectId, trendId);
-      setTrends(prev => prev.map(t => t.id === trendId ? { ...t, summary: response.data.trend.summary } : t));
+      setTrends(prev => prev.map(t => t.id === trendId ? { 
+        ...t, 
+        title: response.data.trend.title || null,
+        summary: response.data.trend.summary 
+      } : t));
       return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to regenerate summary';

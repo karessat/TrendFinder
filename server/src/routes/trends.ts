@@ -211,6 +211,11 @@ router.put('/:trendId', validate(updateTrendSchema), (req: AuthRequest, res: Res
     const updates: string[] = [];
     const values: any[] = [];
     
+    if (req.body.title !== undefined) {
+      updates.push('title = ?');
+      values.push(req.body.title);
+    }
+    
     if (req.body.summary !== undefined) {
       updates.push('summary = ?');
       values.push(req.body.summary);
@@ -313,6 +318,7 @@ router.post('/:trendId/regenerate-summary', async (req: AuthRequest, res: Respon
     res.json({
       trend: {
         id: trend.id,
+        title: trend.title,
         summary: trend.summary,
         signalCount: trend.signal_count,
         status: trend.status,

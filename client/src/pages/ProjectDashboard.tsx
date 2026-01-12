@@ -39,9 +39,26 @@ export default function ProjectDashboard() {
       // If no status, assume not started or pending - allow access
       return true;
     }
-    // Processing is complete if status is 'complete' or 'error'
-    // 'error' means processing failed, but signals may still be reviewable
-    return status.status === 'complete' || status.status === 'error';
+    
+    // Check explicit status first
+    if (status.status === 'complete' || status.status === 'error') {
+      return true;
+    }
+    
+    // Also check if all phases are actually complete (handles cases where status wasn't updated)
+    // This fixes the bug where status might be 'claude_verification' but all work is done
+    if (status.totalSignals > 0) {
+      const allEmbeddingsDone = status.embeddingsComplete >= status.totalSignals;
+      const allSimilaritiesDone = status.embeddingSimilaritiesComplete >= status.totalSignals;
+      const allVerificationsDone = status.claudeVerificationsComplete >= status.totalSignals;
+      
+      // If all phases are complete, allow access even if status field says otherwise
+      if (allEmbeddingsDone && allSimilaritiesDone && allVerificationsDone) {
+        return true;
+      }
+    }
+    
+    return false;
   };
 
   const handleReviewClick = (e: React.MouseEvent) => {
@@ -189,11 +206,17 @@ export default function ProjectDashboard() {
             <p className="text-sm text-gray-600 mb-4">
               Upload a spreadsheet (Excel or CSV) to import signals for analysis.
             </p>
-            <Link to={`/projects/${effectiveProjectId}/upload`}>
-              <Button variant="primary" className="w-full">
+            {effectiveProjectId ? (
+              <Link to={`/projects/${effectiveProjectId}/upload`}>
+                <Button variant="primary" className="w-full">
+                  Upload Spreadsheet
+                </Button>
+              </Link>
+            ) : (
+              <Button variant="primary" className="w-full" disabled>
                 Upload Spreadsheet
               </Button>
-            </Link>
+            )}
           </Card>
 
           <Card title="Review Signals">
@@ -202,24 +225,44 @@ export default function ProjectDashboard() {
             </p>
             {!isProcessingComplete() && status && (
               <div className="mb-3 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
-                <p className="text-sm text-yellow-800">
-                  Processing in progress... Please wait until processing is complete.
+                <p className="text-sm text-yellow-800 font-medium">
+                  ⏳ Processing in progress... Please wait until processing is complete.
                 </p>
               </div>
             )}
-            <Link 
-              to={`/projects/${effectiveProjectId}/review`}
-              onClick={handleReviewClick}
-              className={!isProcessingComplete() ? 'pointer-events-none' : ''}
-            >
+            {effectiveProjectId && isProcessingComplete() && project.signalCount > 0 ? (
+              <Link to={`/projects/${effectiveProjectId}/review`}>
+                <Button variant="primary" className="w-full">
+                  Start Review
+                </Button>
+              </Link>
+            ) : (
               <Button 
                 variant="primary" 
                 className="w-full" 
-                disabled={project.signalCount === 0 || !isProcessingComplete()}
+                disabled={true}
+                title={!isProcessingComplete() && status 
+                  ? `Processing is ${status.percentComplete}% complete. Please wait until processing finishes before reviewing signals.` 
+                  : project.signalCount === 0 
+                    ? 'No signals available. Upload a spreadsheet first.' 
+                    : 'Start reviewing and grouping signals into trends'}
+                onClick={handleReviewClick}
               >
-                {!isProcessingComplete() ? 'Processing...' : 'Start Review'}
+                {!isProcessingComplete() ? (
+                  <span className="flex items-center justify-center">
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Processing...
+                  </span>
+                ) : project.signalCount === 0 ? (
+                  'No Signals Available'
+                ) : (
+                  'Start Review'
+                )}
               </Button>
-            </Link>
+            )}
           </Card>
 
           <Card title="View Trends">
@@ -281,33 +324,71 @@ export default function ProjectDashboard() {
         <Modal
           isOpen={isProcessingAlertOpen}
           onClose={() => setIsProcessingAlertOpen(false)}
-          title="Processing In Progress"
+          title="⏳ Processing In Progress"
           size="md"
         >
           <div className="space-y-4">
-            <p className="text-gray-700">
-              The signal processing is still in progress. Please wait until processing is complete before reviewing signals.
-            </p>
+            <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-yellow-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <p className="text-sm font-medium text-yellow-800">
+                    Signal processing is still running. Please wait until processing completes before reviewing signals.
+                  </p>
+                </div>
+              </div>
+            </div>
+            
             {status && (
-              <div className="bg-gray-50 p-4 rounded-md">
-                <div className="text-sm font-semibold text-gray-700 mb-2">Current Status:</div>
-                <div className="text-sm text-gray-600 capitalize mb-3">{status.status}</div>
+              <div className="bg-gray-50 p-4 rounded-md border border-gray-200">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-sm font-semibold text-gray-700">Current Status:</div>
+                  <div className="text-sm font-medium text-gray-900 capitalize">{status.status.replace('_', ' ')}</div>
+                </div>
                 <ProgressBar
                   value={status.percentComplete}
                   showPercentage={true}
                   color="blue"
                 />
-                <div className="mt-3 text-xs text-gray-500">
+                <div className="mt-3 grid grid-cols-3 gap-4 text-xs text-gray-600">
+                  <div>
+                    <span className="font-medium">Embeddings:</span> {status.embeddingsComplete} / {status.totalSignals}
+                  </div>
+                  <div>
+                    <span className="font-medium">Similarities:</span> {status.embeddingSimilaritiesComplete} / {status.totalSignals}
+                  </div>
+                  <div>
+                    <span className="font-medium">Verification:</span> {status.claudeVerificationsComplete} / {status.totalSignals}
+                  </div>
+                </div>
+                <div className="mt-2 text-xs text-gray-500 text-center">
                   {status.percentComplete}% complete
                 </div>
               </div>
             )}
-            <div className="flex justify-end space-x-3 mt-6">
+            
+            <div className="bg-blue-50 border-l-4 border-blue-400 p-4 rounded">
+              <p className="text-sm text-blue-800">
+                <strong>Tip:</strong> You can check back on the dashboard to see when processing is complete. The "Review Signals" button will be enabled automatically.
+              </p>
+            </div>
+            
+            <div className="flex justify-end space-x-3 mt-6 pt-4 border-t border-gray-200">
               <Button
-                variant="outline"
-                onClick={() => setIsProcessingAlertOpen(false)}
+                variant="primary"
+                onClick={() => {
+                  setIsProcessingAlertOpen(false);
+                  // Optionally reload status
+                  if (reloadStatus) {
+                    reloadStatus();
+                  }
+                }}
               >
-                Close
+                Got it
               </Button>
             </div>
           </div>

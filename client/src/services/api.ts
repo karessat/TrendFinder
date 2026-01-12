@@ -76,7 +76,13 @@ export const authApi = {
   
   logout: () => api.post('/auth/logout'),
   
-  getMe: () => api.get<{ user: { id: string; email: string; role: string } }>('/auth/me')
+  getMe: () => api.get<{ user: { id: string; email: string; role: string } }>('/auth/me'),
+  
+  forgotPassword: (data: { email: string; resetUrl?: string }) =>
+    api.post<{ message: string }>('/auth/forgot-password', data),
+  
+  resetPassword: (data: { token: string; password: string }) =>
+    api.post<{ message: string }>('/auth/reset-password', data)
 };
 
 // Projects

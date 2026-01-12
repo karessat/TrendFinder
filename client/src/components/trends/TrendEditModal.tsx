@@ -18,6 +18,7 @@ export function TrendEditModal({
   onSave,
   onRegenerateSummary
 }: TrendEditModalProps) {
+  const [title, setTitle] = useState('');
   const [summary, setSummary] = useState('');
   const [status, setStatus] = useState<Trend['status']>('draft');
   const [isLoading, setIsLoading] = useState(false);
@@ -26,6 +27,7 @@ export function TrendEditModal({
 
   useEffect(() => {
     if (trend) {
+      setTitle(trend.title || '');
       setSummary(trend.summary);
       setStatus(trend.status);
     }
@@ -39,6 +41,9 @@ export function TrendEditModal({
     setError(null);
     try {
       const updates: UpdateTrendRequest = {};
+      if (title !== (trend.title || '')) {
+        updates.title = title || null;
+      }
       if (summary !== trend.summary) {
         updates.summary = summary;
       }
@@ -71,6 +76,7 @@ export function TrendEditModal({
 
   const handleClose = () => {
     if (!isLoading && !isRegenerating && trend) {
+      setTitle(trend.title || '');
       setSummary(trend.summary);
       setStatus(trend.status);
       setError(null);
@@ -83,6 +89,22 @@ export function TrendEditModal({
   return (
     <Modal isOpen={isOpen} onClose={handleClose} title="Edit Trend" size="lg">
       <form onSubmit={handleSubmit}>
+        <div className="mb-4">
+          <label htmlFor="trend-title" className="block text-sm font-medium text-gray-700 mb-2">
+            Title
+          </label>
+          <input
+            id="trend-title"
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            disabled={isLoading || isRegenerating}
+            placeholder="Enter a title for this trend (optional)"
+            maxLength={200}
+          />
+        </div>
+
         <div className="mb-4">
           <div className="flex items-center justify-between mb-2">
             <label htmlFor="trend-summary" className="block text-sm font-medium text-gray-700">

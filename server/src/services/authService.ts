@@ -186,3 +186,93 @@ export function checkProjectAccess(userId: string, projectId: string, userRole: 
   return owner !== undefined;
 }
 
+/**
+ * Create a password reset token for a user
+ * Returns the plain token (to be sent via email) and stores the hash in the database
+ */
+export async function createPasswordResetToken(userId: string): Promise<string> {
+  const db = getUserDatabase();
+  const crypto = await import('crypto');
+  
+  // Generate secure random token
+  const token = crypto.randomBytes(32).toString('hex');
+  const tokenHash = await hashPassword(token); // Use bcrypt to hash the token
+  
+  const resetId = uuidv4();
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
+  
+  // Invalidate any existing reset tokens for this user
+  db.prepare(`
+    UPDATE user_password_resets 
+    SET used_at = CURRENT_TIMESTAMP 
+    WHERE user_id = ? AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+  `).run(userId);
+  
+  // Insert new reset token
+  db.prepare(`
+    INSERT INTO user_password_resets (id, user_id, token_hash, expires_at)
+    VALUES (?, ?, ?, ?)
+  `).run(resetId, userId, tokenHash, expiresAt.toISOString());
+  
+  logger.info({ userId, resetId }, 'Password reset token created');
+  
+  return token;
+}
+
+/**
+ * Verify and consume a password reset token
+ * Returns the user ID if valid, null otherwise
+ */
+export async function verifyPasswordResetToken(token: string): Promise<string | null> {
+  const db = getUserDatabase();
+  
+  // Get all unused, unexpired reset tokens
+  const resets = db.prepare(`
+    SELECT id, user_id, token_hash, expires_at
+    FROM user_password_resets
+    WHERE used_at IS NULL 
+      AND expires_at > datetime('now')
+    ORDER BY created_at DESC
+  `).all() as Array<{
+    id: string;
+    user_id: string;
+    token_hash: string;
+    expires_at: string;
+  }>;
+  
+  // Check each token (we need to check all because tokens are hashed)
+  for (const reset of resets) {
+    const isValid = await verifyPassword(token, reset.token_hash);
+    if (isValid) {
+      // Mark token as used
+      db.prepare(`
+        UPDATE user_password_resets 
+        SET used_at = CURRENT_TIMESTAMP 
+        WHERE id = ?
+      `).run(reset.id);
+      
+      logger.info({ userId: reset.user_id, resetId: reset.id }, 'Password reset token verified');
+      return reset.user_id;
+    }
+  }
+  
+  logger.warn('Invalid or expired password reset token');
+  return null;
+}
+
+/**
+ * Update user password
+ */
+export async function updateUserPassword(userId: string, newPassword: string): Promise<void> {
+  const db = getUserDatabase();
+  const passwordHash = await hashPassword(newPassword);
+  
+  db.prepare(`
+    UPDATE users 
+    SET password_hash = ?, updated_at = CURRENT_TIMESTAMP 
+    WHERE id = ?
+  `).run(passwordHash, userId);
+  
+  logger.info({ userId }, 'User password updated');
+}
+

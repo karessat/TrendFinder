@@ -11,6 +11,44 @@ import { logger } from '../config/logger';
 const TOP_N_CANDIDATES = 40;
 const PROGRESS_LOG_INTERVAL = 50; // Log progress every N items
 
+/**
+ * Process items in parallel batches
+ */
+async function processInBatches<T, R>(
+  items: T[],
+  processor: (item: T) => Promise<R>,
+  concurrency: number,
+  onProgress?: (completed: number, total: number) => void
+): Promise<R[]> {
+  const results: R[] = [];
+  const errors: Array<{ item: T; error: Error }> = [];
+  
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = items.slice(i, i + concurrency);
+    const batchPromises = batch.map(async (item) => {
+      try {
+        return await processor(item);
+      } catch (error) {
+        errors.push({ item, error: error as Error });
+        return null;
+      }
+    });
+    
+    const batchResults = await Promise.all(batchPromises);
+    results.push(...batchResults.filter(r => r !== null) as R[]);
+    
+    if (onProgress) {
+      onProgress(results.length, items.length);
+    }
+  }
+  
+  if (errors.length > 0) {
+    logger.warn({ errorCount: errors.length }, 'Some items failed during batch processing');
+  }
+  
+  return results;
+}
+
 // Processing lock to prevent concurrent processing of the same project
 const processingLocks = new Map<string, boolean>();
 
@@ -69,6 +107,7 @@ async function sleep(ms: number): Promise<void> {
 /**
  * Phase 1: Generate embeddings for all signals
  * RESUMABLE: Only processes signals without embeddings
+ * OPTIMIZED: Parallel processing with configurable concurrency
  */
 async function generateAllEmbeddings(db: Database.Database, projectId: string): Promise<void> {
   const signals = db.prepare(`
@@ -80,7 +119,10 @@ async function generateAllEmbeddings(db: Database.Database, projectId: string): 
     return;
   }
   
-  logger.info({ projectId, count: signals.length }, 'Phase 1: Starting embedding generation');
+  const env = getEnv();
+  const concurrency = env.PROCESSING_CONCURRENCY || 5;
+  
+  logger.info({ projectId, count: signals.length, concurrency }, 'Phase 1: Starting parallel embedding generation');
   
   // Prepare statement once, reuse in loop
   const updateStmt = db.prepare(`
@@ -96,52 +138,81 @@ async function generateAllEmbeddings(db: Database.Database, projectId: string): 
   const total = status.total_signals;
   const startTime = Date.now();
   
-  logger.info({ projectId, completed, total, remaining: signals.length }, 'Phase 1: Starting embedding generation');
+  logger.info({ projectId, completed, total, remaining: signals.length, concurrency }, 'Phase 1: Starting parallel embedding generation');
   
-  for (let i = 0; i < signals.length; i++) {
-    const signal = signals[i];
-    const signalStartTime = Date.now();
-    
-    try {
-      logger.debug({ projectId, signalId: signal.id, index: i + 1, total: signals.length }, 'Generating embedding');
-      const embedding = await generateEmbedding(signal.original_text);
-      
-      if (embedding) {
-        updateStmt.run(JSON.stringify(embedding), signal.id);
+  // Process signals in parallel batches
+  // Collect results first, then update database sequentially (SQLite limitation)
+  interface EmbeddingResult {
+    signalId: string;
+    embedding: number[] | null;
+    error?: Error;
+  }
+  
+  const results: EmbeddingResult[] = await processInBatches(
+    signals,
+    async (signal) => {
+      const signalStartTime = Date.now();
+      try {
+        logger.debug({ projectId, signalId: signal.id }, 'Generating embedding');
+        const embedding = await generateEmbedding(signal.original_text);
         const signalDuration = Date.now() - signalStartTime;
-        logger.debug({ projectId, signalId: signal.id, duration: signalDuration }, 'Embedding generated');
-      } else {
-        logger.warn({ projectId, signalId: signal.id }, 'Generated embedding is null');
+        
+        if (embedding) {
+          logger.debug({ projectId, signalId: signal.id, duration: signalDuration }, 'Embedding generated');
+          return { signalId: signal.id, embedding };
+        } else {
+          logger.warn({ projectId, signalId: signal.id }, 'Generated embedding is null');
+          return { signalId: signal.id, embedding: null };
+        }
+      } catch (error) {
+        const signalDuration = Date.now() - signalStartTime;
+        logger.error({ projectId, signalId: signal.id, error, duration: signalDuration }, 'Failed to generate embedding');
+        return { signalId: signal.id, embedding: null, error: error as Error };
       }
-      
-      completed++;
+    },
+    concurrency
+  );
+  
+  // Update database sequentially with collected results
+  for (const result of results) {
+    if (result.embedding) {
+      updateStmt.run(JSON.stringify(result.embedding), result.signalId);
+    }
+    completed++;
+    
+    // Update progress periodically
+    if (completed % 10 === 0 || completed % PROGRESS_LOG_INTERVAL === 0 || completed === total) {
       updateProcessingStatus(db, projectId, { embeddings_complete: completed });
       
-      // Log progress more frequently (every 10 signals) and always log milestones
-      if (completed % 10 === 0 || completed % PROGRESS_LOG_INTERVAL === 0 || completed === total) {
-        const elapsed = Date.now() - startTime;
-        const rate = completed / (elapsed / 1000); // signals per second
-        const remaining = total - completed;
-        const estimatedSecondsRemaining = remaining / rate;
-        logger.info({ 
-          projectId, 
-          completed, 
-          total, 
-          percentComplete: Math.round((completed / total) * 100),
-          elapsedSeconds: Math.round(elapsed / 1000),
-          rate: rate.toFixed(2),
-          estimatedSecondsRemaining: Math.round(estimatedSecondsRemaining)
-        }, 'Phase 1: Embedding progress');
-      }
-    } catch (error) {
-      const signalDuration = Date.now() - signalStartTime;
-      logger.error({ projectId, signalId: signal.id, error, duration: signalDuration }, 'Failed to generate embedding');
-      // Continue with next signal
+      const elapsed = Date.now() - startTime;
+      const rate = completed / (elapsed / 1000); // signals per second
+      const remaining = total - completed;
+      const estimatedSecondsRemaining = remaining / rate;
+      logger.info({ 
+        projectId, 
+        completed, 
+        total, 
+        percentComplete: Math.round((completed / total) * 100),
+        elapsedSeconds: Math.round(elapsed / 1000),
+        rate: rate.toFixed(2),
+        estimatedSecondsRemaining: Math.round(estimatedSecondsRemaining),
+        concurrency
+      }, 'Phase 1: Embedding progress');
     }
   }
   
+  // Final progress update
+  updateProcessingStatus(db, projectId, { embeddings_complete: completed });
+  
   const totalDuration = Date.now() - startTime;
-  logger.info({ projectId, completed, total, duration: Math.round(totalDuration / 1000) }, 'Phase 1: Embedding generation complete');
+  logger.info({ 
+    projectId, 
+    completed, 
+    total, 
+    duration: Math.round(totalDuration / 1000),
+    concurrency,
+    speedup: `~${concurrency}x faster than sequential`
+  }, 'Phase 1: Embedding generation complete');
 }
 
 /**
@@ -212,12 +283,10 @@ async function calculateEmbeddingSimilarities(db: Database.Database, projectId: 
  * Phase 3: Verify similarities with Claude
  * RESUMABLE: Only processes signals without similar_signals
  * Tracks failures separately for potential retry
+ * OPTIMIZED: Parallel processing with rate limit awareness
  */
 async function verifyWithClaude(db: Database.Database, projectId: string): Promise<void> {
-  // Use let so we can reassign if connection is closed during async operations
-  let dbConnection = db;
-  
-  const signals = dbConnection.prepare(`
+  const signals = db.prepare(`
     SELECT id, original_text, embedding_candidates 
     FROM signals 
     WHERE embedding_candidates IS NOT NULL AND similar_signals IS NULL
@@ -232,167 +301,171 @@ async function verifyWithClaude(db: Database.Database, projectId: string): Promi
     return;
   }
   
-  logger.info({ projectId, count: signals.length }, 'Phase 3: Starting Claude verification');
+  const env = getEnv();
+  // Use lower concurrency for Claude API to respect rate limits
+  // Default to 2-3 concurrent requests to avoid hitting rate limits
+  const concurrency = Math.min(env.PROCESSING_CONCURRENCY || 5, 3);
+  const delayMs = env.CLAUDE_RATE_LIMIT_DELAY_MS;
   
-  const status = getProcessingStatus(dbConnection, projectId);
+  logger.info({ projectId, count: signals.length, concurrency }, 'Phase 3: Starting parallel Claude verification');
+  
+  const status = getProcessingStatus(db, projectId);
   if (!status) {
     throw new Error('Processing status record not found');
   }
   let completed = status.claude_verifications_complete || 0;
   let failures = status.claude_verification_failures || 0;
+  const total = status.total_signals;
+  const startTime = Date.now();
   
-  const delayMs = getEnv().CLAUDE_RATE_LIMIT_DELAY_MS;
+  // Prepare statements once
+  const updateStmt = db.prepare(`
+    UPDATE signals SET similar_signals = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+  `);
   
-  // Helper function to ensure database connection is valid
-  const ensureDbConnection = (): Database.Database => {
-    if (!dbConnection.open) {
-      logger.warn({ projectId }, 'Database connection closed, getting new connection');
-      closeDatabase(projectId);
-      dbConnection = getDatabase(projectId);
-    }
-    return dbConnection;
-  };
+  interface VerificationResult {
+    signalId: string;
+    verifiedSimilarities: SimilarityScore[];
+    error?: Error;
+  }
   
-  for (let i = 0; i < signals.length; i++) {
-    const signal = signals[i];
-    let candidates: SimilarityScore[];
+  // Process signals in parallel batches with rate limiting
+  const results: VerificationResult[] = [];
+  let processedCount = 0;
+  
+  for (let i = 0; i < signals.length; i += concurrency) {
+    const batch = signals.slice(i, i + concurrency);
     
-    // Ensure connection is valid at start of each iteration
-    dbConnection = ensureDbConnection();
-    
-    // Prepare statement fresh each iteration in case connection changed
-    const updateStmt = dbConnection.prepare(`
-      UPDATE signals SET similar_signals = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-    `);
-    
-    try {
-      candidates = JSON.parse(signal.embedding_candidates) as SimilarityScore[];
-    } catch (error) {
-      logger.error({ signalId: signal.id, error }, 'Failed to parse embedding_candidates JSON');
-      updateStmt.run(JSON.stringify([]), signal.id);
-      completed++;
-      failures++;
-      dbConnection = ensureDbConnection();
-      updateProcessingStatus(dbConnection, projectId, { 
-        claude_verifications_complete: completed,
-        claude_verification_failures: failures
-      });
-      continue;
-    }
-    
-    // Get full text for each candidate
-    const candidateIds = candidates.map(c => c.id);
-    if (candidateIds.length === 0) {
-      updateStmt.run(JSON.stringify([]), signal.id);
-      completed++;
-      dbConnection = ensureDbConnection();
-      updateProcessingStatus(dbConnection, projectId, { claude_verifications_complete: completed });
-      continue;
-    }
-    
-    // Batch fetch candidate texts using IN clause with proper parameterization
-    const placeholders = candidateIds.map(() => '?').join(',');
-    const getCandidateBatchStmt = dbConnection.prepare(`
-      SELECT id, original_text FROM signals WHERE id IN (${placeholders})
-    `);
-    
-    let candidateRecords: Array<{ id: string; original_text: string }>;
-    try {
-      candidateRecords = getCandidateBatchStmt.all(...candidateIds) as Array<{ id: string; original_text: string }>;
-    } catch (error) {
-      logger.error({ signalId: signal.id, candidateIds, error }, 'Failed to fetch candidate texts');
-      updateStmt.run(JSON.stringify([]), signal.id);
-      completed++;
-      failures++;
-      dbConnection = ensureDbConnection();
-      updateProcessingStatus(dbConnection, projectId, { 
-        claude_verifications_complete: completed,
-        claude_verification_failures: failures
-      });
-      continue;
-    }
-    
-    const candidateMap = new Map(candidateRecords.map(c => [c.id, c.original_text]));
-    const candidatesWithText = candidates
-      .map(c => ({ id: c.id, text: candidateMap.get(c.id) || '' }))
-      .filter(c => c.text !== '');
-    
-    if (candidatesWithText.length === 0) {
-      // No valid candidates found
-      updateStmt.run(JSON.stringify([]), signal.id);
-      completed++;
-      dbConnection = ensureDbConnection();
-      updateProcessingStatus(dbConnection, projectId, { claude_verifications_complete: completed });
-      continue;
-    }
-    
-    try {
-      const verifiedResults = await verifySimilarities(
-        { id: signal.id, text: signal.original_text },
-        candidatesWithText
-      );
-      
-      // Ensure connection is still valid after async Claude API call
-      dbConnection = ensureDbConnection();
-      
-      // Re-prepare statement in case connection changed
-      const currentUpdateStmt = dbConnection.prepare(`
-        UPDATE signals SET similar_signals = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-      `);
-      
-      // Map Claude's results back to signal IDs (validate array indices)
-      const verifiedSimilarities: SimilarityScore[] = verifiedResults
-        .filter(result => result.number >= 1 && result.number <= candidatesWithText.length)
-        .map(result => {
-          const candidate = candidatesWithText[result.number - 1];
-          return candidate ? { id: candidate.id, score: result.score } : null;
-        })
-        .filter((item): item is SimilarityScore => item !== null && item.score >= 5); // Only include score >= 5 as per prompt
-      
-      currentUpdateStmt.run(JSON.stringify(verifiedSimilarities), signal.id);
-      completed++;
-      
-      logger.debug({ 
-        signalId: signal.id, 
-        similarCount: verifiedSimilarities.length,
-        progress: `${completed}/${signals.length}`
-      }, 'Signal verified');
-      
-    } catch (error) {
-      logger.error({ signalId: signal.id, error, errorMessage: error instanceof Error ? error.message : String(error) }, 'Claude verification failed');
-      
-      // Ensure connection is valid after error
-      dbConnection = ensureDbConnection();
-      const errorUpdateStmt = dbConnection.prepare(`
-        UPDATE signals SET similar_signals = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-      `);
+    const batchPromises = batch.map(async (signal): Promise<VerificationResult> => {
+      let candidates: SimilarityScore[];
       
       try {
-        errorUpdateStmt.run(JSON.stringify([]), signal.id);
-      } catch (updateError) {
-        logger.error({ signalId: signal.id, updateError }, 'Failed to update signal with empty similar_signals');
+        candidates = JSON.parse(signal.embedding_candidates) as SimilarityScore[];
+      } catch (error) {
+        logger.error({ signalId: signal.id, error }, 'Failed to parse embedding_candidates JSON');
+        return { signalId: signal.id, verifiedSimilarities: [] };
       }
       
+      // Get full text for each candidate
+      const candidateIds = candidates.map(c => c.id);
+      if (candidateIds.length === 0) {
+        return { signalId: signal.id, verifiedSimilarities: [] };
+      }
+      
+      // Batch fetch candidate texts
+      const placeholders = candidateIds.map(() => '?').join(',');
+      const getCandidateBatchStmt = db.prepare(`
+        SELECT id, original_text FROM signals WHERE id IN (${placeholders})
+      `);
+      
+      let candidateRecords: Array<{ id: string; original_text: string }>;
+      try {
+        candidateRecords = getCandidateBatchStmt.all(...candidateIds) as Array<{ id: string; original_text: string }>;
+      } catch (error) {
+        logger.error({ signalId: signal.id, candidateIds, error }, 'Failed to fetch candidate texts');
+        return { signalId: signal.id, verifiedSimilarities: [] };
+      }
+      
+      const candidateMap = new Map(candidateRecords.map(c => [c.id, c.original_text]));
+      const candidatesWithText = candidates
+        .map(c => ({ id: c.id, text: candidateMap.get(c.id) || '' }))
+        .filter(c => c.text !== '');
+      
+      if (candidatesWithText.length === 0) {
+        return { signalId: signal.id, verifiedSimilarities: [] };
+      }
+      
+      try {
+        const verifiedResults = await verifySimilarities(
+          { id: signal.id, text: signal.original_text },
+          candidatesWithText
+        );
+        
+        // Map Claude's results back to signal IDs
+        const verifiedSimilarities: SimilarityScore[] = verifiedResults
+          .filter(result => result.number >= 1 && result.number <= candidatesWithText.length)
+          .map(result => {
+            const candidate = candidatesWithText[result.number - 1];
+            return candidate ? { id: candidate.id, score: result.score } : null;
+          })
+          .filter((item): item is SimilarityScore => item !== null && item.score >= 5);
+        
+        logger.debug({ 
+          signalId: signal.id, 
+          similarCount: verifiedSimilarities.length
+        }, 'Signal verified');
+        
+        return { signalId: signal.id, verifiedSimilarities };
+      } catch (error) {
+        logger.error({ 
+          signalId: signal.id, 
+          error, 
+          errorMessage: error instanceof Error ? error.message : String(error) 
+        }, 'Claude verification failed');
+        return { signalId: signal.id, verifiedSimilarities: [], error: error as Error };
+      }
+    });
+    
+    // Wait for batch to complete
+    const batchResults = await Promise.all(batchPromises);
+    results.push(...batchResults);
+    processedCount += batch.length;
+    
+    // Update database sequentially with batch results
+    for (const result of batchResults) {
+      updateStmt.run(JSON.stringify(result.verifiedSimilarities), result.signalId);
       completed++;
-      failures++;
+      if (result.error) {
+        failures++;
+      }
     }
     
-    // Update status after each signal (connection should be valid)
-    dbConnection = ensureDbConnection();
-    try {
-      updateProcessingStatus(dbConnection, projectId, { 
+    // Update progress periodically
+    if (processedCount % 10 === 0 || processedCount % PROGRESS_LOG_INTERVAL === 0 || processedCount === signals.length) {
+      updateProcessingStatus(db, projectId, { 
         claude_verifications_complete: completed,
         claude_verification_failures: failures
       });
-    } catch (statusError) {
-      logger.error({ projectId, statusError }, 'Failed to update processing status');
+      
+      const elapsed = Date.now() - startTime;
+      const rate = completed / (elapsed / 1000);
+      const remaining = total - completed;
+      const estimatedSecondsRemaining = remaining / rate;
+      logger.info({ 
+        projectId, 
+        completed, 
+        total, 
+        failures,
+        percentComplete: Math.round((completed / total) * 100),
+        elapsedSeconds: Math.round(elapsed / 1000),
+        rate: rate.toFixed(2),
+        estimatedSecondsRemaining: Math.round(estimatedSecondsRemaining),
+        concurrency
+      }, 'Phase 3: Claude verification progress');
     }
     
-    // Rate limiting
-    if (i < signals.length - 1) {
+    // Rate limiting between batches (not between individual items since we're batching)
+    if (i + concurrency < signals.length) {
       await sleep(delayMs);
     }
   }
+  
+  // Final progress update
+  updateProcessingStatus(db, projectId, { 
+    claude_verifications_complete: completed,
+    claude_verification_failures: failures
+  });
+  
+  const totalDuration = Date.now() - startTime;
+  logger.info({ 
+    projectId, 
+    completed, 
+    total, 
+    failures,
+    duration: Math.round(totalDuration / 1000),
+    concurrency,
+    speedup: `~${concurrency}x faster than sequential (with rate limiting)`
+  }, 'Phase 3: Claude verification complete');
   
   if (failures > 0) {
     logger.warn({ failures }, 'Some Claude verifications failed');

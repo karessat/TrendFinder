@@ -42,11 +42,23 @@ const USER_SCHEMA = `
     PRIMARY KEY (project_id, user_id)
   );
 
+  CREATE TABLE IF NOT EXISTS user_password_resets (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL,
+    expires_at DATETIME NOT NULL,
+    used_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
   CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
   CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions(expires_at);
   CREATE INDEX IF NOT EXISTS idx_project_owners_project_id ON project_owners(project_id);
   CREATE INDEX IF NOT EXISTS idx_project_owners_user_id ON project_owners(user_id);
+  CREATE INDEX IF NOT EXISTS idx_password_resets_user_id ON user_password_resets(user_id);
+  CREATE INDEX IF NOT EXISTS idx_password_resets_token_hash ON user_password_resets(token_hash);
+  CREATE INDEX IF NOT EXISTS idx_password_resets_expires_at ON user_password_resets(expires_at);
 `;
 
 let userDb: Database.Database | null = null;

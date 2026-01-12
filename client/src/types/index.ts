@@ -149,6 +149,7 @@ export interface CreateTrendRequest {
 }
 
 export interface UpdateTrendRequest {
+  title?: string | null;
   summary?: string;
   status?: 'draft' | 'final' | 'retired' | 'archived';
   note?: string | null;

@@ -31,6 +31,7 @@ export const createTrendSchema = z.object({
 });
 
 export const updateTrendSchema = z.object({
+  title: z.string().max(200).optional().nullable(),
   summary: z.string().min(1).max(1000).optional(),
   status: z.enum(['draft', 'final', 'retired', 'archived']).optional(),
   note: z.string().max(5000).optional().nullable()
