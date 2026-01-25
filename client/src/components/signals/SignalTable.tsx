@@ -8,6 +8,7 @@ interface SignalTableProps {
   onArchive?: (signal: Signal) => void;
   onSelect?: (id: string) => void;
   selectedIds?: string[];
+  projectId?: string;
 }
 
 export function SignalTable({
@@ -16,7 +17,8 @@ export function SignalTable({
   onDelete,
   onArchive,
   onSelect,
-  selectedIds = []
+  selectedIds = [],
+  projectId
 }: SignalTableProps) {
   if (signals.length === 0) {
     return (
@@ -38,6 +40,7 @@ export function SignalTable({
           onEdit={onEdit}
           onDelete={onDelete}
           onArchive={onArchive}
+          projectId={projectId}
         />
       ))}
     </div>

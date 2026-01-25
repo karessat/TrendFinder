@@ -143,6 +143,7 @@ export default function SignalsCRUD() {
               onEdit={handleEdit}
               onDelete={handleDeleteClick}
               onArchive={handleArchive}
+              projectId={projectId}
             />
           )}
         </Card>

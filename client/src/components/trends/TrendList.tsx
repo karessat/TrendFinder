@@ -7,9 +7,11 @@ interface TrendListProps {
   onEdit?: (trend: Trend) => void;
   onDelete?: (id: string) => void;
   onRetire?: (trend: Trend) => void;
+  onUndo?: (id: string) => Promise<void>;
+  onViewSignals?: (id: string) => Promise<void>;
 }
 
-export function TrendList({ trends, projectId, onEdit, onDelete, onRetire }: TrendListProps) {
+export function TrendList({ trends, projectId, onEdit, onDelete, onRetire, onUndo, onViewSignals }: TrendListProps) {
   if (trends.length === 0) {
     return (
       <div className="text-center py-12 text-gray-500">
@@ -28,6 +30,8 @@ export function TrendList({ trends, projectId, onEdit, onDelete, onRetire }: Tre
           onEdit={onEdit}
           onDelete={onDelete}
           onRetire={onRetire}
+          onUndo={onUndo}
+          onViewSignals={onViewSignals}
         />
       ))}
     </div>

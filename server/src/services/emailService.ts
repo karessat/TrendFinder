@@ -52,7 +52,8 @@ export async function sendEmail(options: EmailOptions): Promise<void> {
  */
 export async function sendPasswordResetEmail(email: string, resetToken: string, resetUrl: string): Promise<void> {
   const subject = 'Reset Your TrendFinder Password';
-  const resetLink = resetUrl || `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${resetToken}`;
+  // Use the provided resetUrl (which should already have correct origin from request)
+  const resetLink = resetUrl || `${process.env.FRONTEND_URL || 'http://localhost:5174'}/reset-password?token=${resetToken}`;
   
   const html = `
     <!DOCTYPE html>

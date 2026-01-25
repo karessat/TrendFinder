@@ -26,15 +26,15 @@ export function useSignals(projectId: string) {
     }
   }, [projectId]);
 
-  const loadNextUnassigned = useCallback(async () => {
+  const loadNextUnassigned = useCallback(async (excludeSignalId?: string) => {
     setIsLoading(true);
     setError(null);
     try {
       if (!projectId) {
         throw new Error('Project ID is required');
       }
-      console.log('Loading next unassigned for project:', projectId, 'Length:', projectId.length);
-      const response = await signalsApi.getNextUnassigned(projectId);
+      console.log('Loading next unassigned for project:', projectId, 'Length:', projectId.length, 'Excluding:', excludeSignalId);
+      const response = await signalsApi.getNextUnassigned(projectId, excludeSignalId);
       setNextUnassigned(response.data);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load next unassigned signal';
@@ -71,11 +71,20 @@ export function useSignals(projectId: string) {
       const updatedSignal = response.data;
       setSignals(prev => prev.map(s => s.id === signalId ? updatedSignal : s));
       // Update nextUnassigned if it's the same signal
+      // But if the signal is being archived or combined, clear it from nextUnassigned
+      // since it won't be in the unassigned list anymore
       if (nextUnassigned?.signal?.id === signalId) {
-        setNextUnassigned(prev => prev ? {
-          ...prev,
-          signal: updatedSignal
-        } : null);
+        if (data.status === 'Archived' || data.status === 'Combined') {
+          // Signal is being archived or combined, so it's no longer unassigned
+          // Clear it from nextUnassigned - the caller should load the next one
+          setNextUnassigned(null);
+        } else {
+          // Just update the signal data
+          setNextUnassigned(prev => prev ? {
+            ...prev,
+            signal: updatedSignal
+          } : null);
+        }
       }
       return true;
     } catch (err) {

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Signal } from '../../types';
 
 interface SignalCardProps {
@@ -9,6 +10,7 @@ interface SignalCardProps {
   onEdit?: (signal: Signal) => void;
   onDelete?: (id: string) => void;
   onArchive?: (signal: Signal) => void;
+  projectId?: string;
 }
 
 export function SignalCard({
@@ -18,7 +20,8 @@ export function SignalCard({
   showActions = false,
   onEdit,
   onDelete,
-  onArchive
+  onArchive,
+  projectId
 }: SignalCardProps) {
   const [showNote, setShowNote] = useState(false);
 
@@ -100,9 +103,20 @@ export function SignalCard({
               {signal.status}
             </span>
             {signal.trendId && (
-              <span className="text-xs text-gray-500">
-                In trend: {signal.trendId.substring(0, 8)}...
-              </span>
+              projectId ? (
+                <Link
+                  to={`/projects/${projectId}/trends/${signal.trendId}`}
+                  className="text-xs text-blue-600 hover:text-blue-800 hover:underline font-medium"
+                  title="View trend"
+                  onClick={(e) => e.stopPropagation()} // Prevent parent click handlers
+                >
+                  In trend: {signal.trendId.substring(0, 8)}...
+                </Link>
+              ) : (
+                <span className="text-xs text-gray-500">
+                  In trend: {signal.trendId.substring(0, 8)}...
+                </span>
+              )
             )}
           </div>
         </div>

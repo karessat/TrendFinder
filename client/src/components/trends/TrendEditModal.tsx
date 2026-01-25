@@ -28,8 +28,13 @@ export function TrendEditModal({
   useEffect(() => {
     if (trend) {
       setTitle(trend.title || '');
-      setSummary(trend.summary);
+      setSummary(trend.summary || '');
       setStatus(trend.status);
+    } else {
+      // Reset when trend is null
+      setTitle('');
+      setSummary('');
+      setStatus('draft');
     }
   }, [trend]);
 
@@ -40,9 +45,14 @@ export function TrendEditModal({
     setIsLoading(true);
     setError(null);
     try {
+      if (!title || title.trim().length === 0) {
+        setError('Title is required');
+        return;
+      }
+      
       const updates: UpdateTrendRequest = {};
-      if (title !== (trend.title || '')) {
-        updates.title = title || null;
+      if (title.trim() !== trend.title) {
+        updates.title = title.trim();
       }
       if (summary !== trend.summary) {
         updates.summary = summary;
@@ -77,7 +87,7 @@ export function TrendEditModal({
   const handleClose = () => {
     if (!isLoading && !isRegenerating && trend) {
       setTitle(trend.title || '');
-      setSummary(trend.summary);
+      setSummary(trend.summary || '');
       setStatus(trend.status);
       setError(null);
       onClose();
@@ -100,8 +110,9 @@ export function TrendEditModal({
             onChange={(e) => setTitle(e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
             disabled={isLoading || isRegenerating}
-            placeholder="Enter a title for this trend (optional)"
+            placeholder="Enter a title for this trend (1-3 words)"
             maxLength={200}
+            required
           />
         </div>
 

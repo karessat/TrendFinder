@@ -53,11 +53,11 @@ export function ArchiveSignalModal({
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="Archive Signal">
+    <Modal isOpen={isOpen} onClose={handleClose} title="Archive Scan Hit">
       <form onSubmit={handleSubmit}>
         <div className="mb-4">
           <p className="text-sm text-gray-700 mb-4">
-            Archiving this signal will mark it as no longer active. Please provide a reason for archiving.
+            Archiving this scan hit will mark it as no longer active. Please provide a reason for archiving.
           </p>
         </div>
 
@@ -71,12 +71,12 @@ export function ArchiveSignalModal({
             onChange={(e) => setNote(e.target.value)}
             rows={4}
             className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-            placeholder="Explain why this signal is being archived..."
+            placeholder="Explain why this scan hit is being archived..."
             required
             disabled={isLoading}
           />
           <p className="mt-1 text-xs text-gray-500">
-            Required: Please provide a brief explanation for archiving this signal.
+            Required: Please provide a brief explanation for archiving this scan hit.
           </p>
         </div>
 
@@ -99,7 +99,7 @@ export function ArchiveSignalModal({
             isLoading={isLoading}
             disabled={!note.trim()}
           >
-            Archive Signal
+            Archive Scan Hit
           </Button>
         </div>
       </form>

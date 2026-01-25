@@ -217,7 +217,7 @@ Example: [{"number": 1, "score": 9}, {"number": 5, "score": 7}, {"number": 12, "
  * Used on-demand when user creates a trend.
  */
 export interface TrendGenerationResult {
-  title: string;  // 2-4 words capturing the gist
+  title: string;  // 1-3 words describing what is changing and how
   summary: string;  // 2-3 sentences describing the trend
 }
 
@@ -229,17 +229,18 @@ export async function generateTrendSummary(signalTexts: string[]): Promise<Trend
   const prompt = `You are helping identify trends from a collection of signals (observations about change) in a foresight/horizon scanning project.
 
 The following signals have been identified as related. Generate:
-1. A short title (2-4 words) that captures the essence/gist of the trend
+1. A short title (1-3 words) that describes what is changing and how it's changing
 2. A concise summary (2-3 sentences) that describes the underlying pattern
 
 SIGNALS:
 ${signalList}
 
 REQUIREMENTS FOR TITLE:
-- Exactly 2-4 words
-- Captures the core essence/gist of the trend
+- Exactly 1-3 words (prefer 2-3 words)
+- Describe what is changing and how it's changing
+- WHERE POSSIBLE, use words from the original signal descriptions
 - Use title case (capitalize important words)
-- Be specific and descriptive
+- Be short, specific, and to the point
 - Examples: "Subscription Economy Growth", "Remote Work Adoption", "Circular Economy Models"
 
 REQUIREMENTS FOR SUMMARY:
@@ -247,13 +248,16 @@ REQUIREMENTS FOR SUMMARY:
 - Maximum 65 words
 - Focus on the underlying trend, not the individual signals
 - Use present tense
-- Be specific and actionable
-- Capture the "so what" - why this trend matters
+- Describe the CHANGE that is happening, NOT its implications or consequences
+- Do NOT explain why the trend matters, what it enables, or what benefits it provides
+- Simply describe what is occurring - the observable change or pattern
+- Be specific and factual about the change itself
 
-Return a JSON object with "title" and "summary" fields. Example:
+IMPORTANT: Return ONLY a valid JSON object with "title" and "summary" fields. No other text before or after the JSON.
+Example format:
 {
   "title": "Subscription Economy Growth",
-  "summary": "Businesses are shifting from ownership to access-based models. This trend enables broader consumer access to products and services while reducing upfront costs."
+  "summary": "Businesses are shifting from ownership to access-based models. Companies are offering subscription services across multiple industries including software, transportation, and consumer goods."
 }`;
 
   return withRetry(async () => {
@@ -280,13 +284,26 @@ Return a JSON object with "title" and "summary" fields. Example:
           };
         }
       } catch (parseError) {
-        logger.warn({ parseError, text }, 'Failed to parse trend generation JSON, falling back to text extraction');
+        logger.warn({ parseError, text: text.substring(0, 500) }, 'Failed to parse trend generation JSON, falling back to text extraction');
+      }
+      
+      // Log if title or summary is missing from parsed JSON
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]) as { title?: string; summary?: string };
+          if (!parsed.title || !parsed.summary) {
+            logger.warn({ parsed, text: text.substring(0, 500) }, 'Generated JSON missing title or summary, falling back to text extraction');
+          }
+        } catch {
+          // Already handled above
+        }
       }
     }
     
     // Fallback: extract title from first line, summary from rest
     const lines = text.split('\n').filter(l => l.trim());
-    const title = lines[0]?.trim().split(/\s+/).slice(0, 4).join(' ') || 'Trend';
+    // Limit to 3 words for title
+    const title = lines[0]?.trim().split(/\s+/).slice(0, 3).join(' ') || 'Trend';
     const summary = lines.slice(1).join(' ').trim() || text.trim();
     
     return {

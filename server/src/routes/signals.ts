@@ -114,6 +114,13 @@ router.get('/', validateQuery(signalListQuerySchema), (req: AuthRequest, res: Re
 router.get('/next-unassigned', (req: AuthRequest, res: Response) => {
   const { projectId } = req.params;
   
+  // Disable caching for this endpoint since it varies by query parameters
+  res.set({
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0'
+  });
+  
   if (!projectExists(projectId)) {
     return res.status(404).json({ error: 'Project not found' });
   }
@@ -122,16 +129,47 @@ router.get('/next-unassigned', (req: AuthRequest, res: Response) => {
   
   try {
     // Get first unassigned signal
-    const signal = db.prepare(`
+    // Note: This query only returns signals with status = 'unassigned'
+    // Archived signals (status = 'retired') and combined signals (status = 'assigned') are excluded
+    // If excludeSignalId is provided, exclude that signal (useful for Skip functionality)
+    const excludeSignalId = req.query.excludeSignalId as string | undefined;
+    
+    logger.info({ projectId, excludeSignalId, query: req.query }, 'Getting next unassigned signal');
+    
+    let query = `
       SELECT id, original_text, title, source, note, status, trend_id, created_at, similar_signals
       FROM signals
       WHERE status = 'unassigned'
-      ORDER BY created_at ASC
-      LIMIT 1
-    `).get() as (SignalRecord & { similar_signals: string | null }) | undefined;
+    `;
+    const params: any[] = [];
+    
+    if (excludeSignalId) {
+      query += ' AND id != ?';
+      params.push(excludeSignalId);
+      logger.info({ excludeSignalId }, 'Excluding signal from query');
+    }
+    
+    query += ' ORDER BY created_at ASC LIMIT 1';
+    
+    logger.info({ query, params }, 'Executing query for next unassigned signal');
+    const signal = db.prepare(query).get(...params) as (SignalRecord & { similar_signals: string | null }) | undefined;
+    
+    if (signal) {
+      logger.info({ signalId: signal.id }, 'Found next unassigned signal');
+    } else {
+      logger.info('No unassigned signal found');
+    }
     
     if (!signal) {
-      const remainingCount = db.prepare("SELECT COUNT(*) as count FROM signals WHERE status = 'unassigned'").get() as { count: number };
+      // Calculate remaining count, excluding the signal we're skipping if provided
+      let countQuery = "SELECT COUNT(*) as count FROM signals WHERE status = 'unassigned'";
+      const countParams: any[] = [];
+      if (excludeSignalId) {
+        countQuery += ' AND id != ?';
+        countParams.push(excludeSignalId);
+      }
+      const remainingCount = db.prepare(countQuery).get(...countParams) as { count: number };
+      logger.info({ remainingCount: remainingCount.count, excludeSignalId }, 'No signal found, returning remaining count');
       return res.json({
         signal: null,
         similarSignals: [],
@@ -190,22 +228,32 @@ router.get('/next-unassigned', (req: AuthRequest, res: Response) => {
       }
     }
     
-    const remainingCount = db.prepare("SELECT COUNT(*) as count FROM signals WHERE status = 'unassigned'").get() as { count: number };
+    // Calculate remaining count, excluding the current signal
+    let countQuery = "SELECT COUNT(*) as count FROM signals WHERE status = 'unassigned' AND id != ?";
+    const countParams = [signal.id];
+    const remainingCount = db.prepare(countQuery).get(...countParams) as { count: number };
     
-          res.json({
-            signal: {
-              id: signal.id,
-              originalText: signal.original_text,
-              title: signal.title,
-              source: signal.source,
-              note: signal.note,
-              status: mapStatusToDisplay(signal.status),
-              trendId: signal.trend_id,
-              createdAt: signal.created_at
-            },
-            similarSignals,
-            remainingCount: remainingCount.count - 1 // Exclude current signal
-          });
+    logger.info({ 
+      signalId: signal.id, 
+      remainingCount: remainingCount.count,
+      excludeSignalId,
+      hasExclude: !!excludeSignalId
+    }, 'Returning next unassigned signal');
+    
+    res.json({
+      signal: {
+        id: signal.id,
+        originalText: signal.original_text,
+        title: signal.title,
+        source: signal.source,
+        note: signal.note,
+        status: mapStatusToDisplay(signal.status),
+        trendId: signal.trend_id,
+        createdAt: signal.created_at
+      },
+      similarSignals,
+      remainingCount: remainingCount.count
+    });
   } finally {
     closeDatabase(projectId);
   }

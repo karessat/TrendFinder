@@ -10,16 +10,22 @@ export default function ForgotPassword() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [resetLink, setResetLink] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
     setSuccess(false);
+    setResetLink(null);
 
     try {
-      await authApi.forgotPassword({ email });
+      const response = await authApi.forgotPassword({ email });
       setSuccess(true);
+      // In development mode, the API may include the reset link
+      if (response.data && 'devResetLink' in response.data) {
+        setResetLink((response.data as any).devResetLink);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send reset email');
     } finally {
@@ -58,10 +64,34 @@ export default function ForgotPassword() {
                 Please check your email and click the link to reset your password.
               </p>
               
-              <p className="text-xs text-gray-500">
-                <strong>Note:</strong> The reset link will expire in 1 hour. If you don't see the email, 
-                check your spam folder.
-              </p>
+              {resetLink ? (
+                <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+                  <p className="text-sm font-medium text-blue-900 mb-2">
+                    🔗 Development Mode: Password Reset Link
+                  </p>
+                  <p className="text-xs text-blue-700 mb-3">
+                    In development, emails are not actually sent. Use this link to reset your password:
+                  </p>
+                  <div className="bg-white border border-blue-300 rounded p-3 mb-3">
+                    <a 
+                      href={resetLink} 
+                      className="text-sm text-blue-600 hover:text-blue-800 break-all underline"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {resetLink}
+                    </a>
+                  </div>
+                  <p className="text-xs text-blue-600">
+                    You can also find this link in the server console output.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-gray-500">
+                  <strong>Note:</strong> The reset link will expire in 1 hour. If you don't see the email, 
+                  check your spam folder. In development mode, check the server console for the reset link.
+                </p>
+              )}
               
               <div className="pt-4 border-t border-gray-200">
                 <Link to="/login">

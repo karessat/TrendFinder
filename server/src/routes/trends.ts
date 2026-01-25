@@ -26,11 +26,14 @@ router.get('/', (req: AuthRequest, res: Response) => {
   const db = getDatabase(projectId);
   
   try {
-    const trends = db.prepare(`
-      SELECT id, title, summary, note, signal_count, status, created_at
-      FROM trends
-      ORDER BY created_at DESC
-    `).all() as Array<{
+    // Check if we should include archived trends (for CRUD views)
+    const includeArchived = req.query.includeArchived === 'true';
+    
+    const query = includeArchived
+      ? `SELECT id, title, summary, note, signal_count, status, created_at FROM trends ORDER BY created_at DESC`
+      : `SELECT id, title, summary, note, signal_count, status, created_at FROM trends WHERE status != 'archived' ORDER BY created_at DESC`;
+    
+    const trends = db.prepare(query).all() as Array<{
       id: string;
       title: string | null;
       summary: string;
@@ -137,9 +140,16 @@ router.post('/', validate(createTrendSchema), async (req: AuthRequest, res: Resp
     
     try {
       trendData = await generateTrendSummary(signalTexts);
+      logger.info({ projectId, title: trendData.title, hasTitle: !!trendData.title }, 'Generated trend title and summary');
     } catch (error) {
       logger.error({ projectId, error }, 'Failed to generate trend title and summary');
       return res.status(500).json({ error: 'Failed to generate trend title and summary' });
+    }
+    
+    // Ensure title is not empty
+    if (!trendData.title || trendData.title.trim().length === 0) {
+      logger.warn({ projectId, trendData }, 'Generated trend data has empty title, using fallback');
+      trendData.title = 'Trend';
     }
     
     // Create trend
@@ -183,6 +193,7 @@ router.post('/', validate(createTrendSchema), async (req: AuthRequest, res: Resp
     res.status(201).json({
       trend: {
         id: trend.id,
+        title: trend.title || 'Trend', // Ensure title is never null
         summary: trend.summary,
         signalCount: trend.signal_count,
         status: trend.status,
@@ -212,8 +223,12 @@ router.put('/:trendId', validate(updateTrendSchema), (req: AuthRequest, res: Res
     const values: any[] = [];
     
     if (req.body.title !== undefined) {
+      // Ensure title is not empty
+      if (!req.body.title || req.body.title.trim().length === 0) {
+        return res.status(400).json({ error: 'Title cannot be empty' });
+      }
       updates.push('title = ?');
-      values.push(req.body.title);
+      values.push(req.body.title.trim());
     }
     
     if (req.body.summary !== undefined) {
@@ -263,6 +278,52 @@ router.put('/:trendId', validate(updateTrendSchema), (req: AuthRequest, res: Res
 });
 
 // Delete trend
+// Undo trend creation - restore signals to pending and archive the trend
+router.post('/:trendId/undo', (req: AuthRequest, res: Response) => {
+  const { projectId, trendId } = req.params;
+  
+  if (!projectExists(projectId)) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+  
+  const db = getDatabase(projectId);
+  
+  try {
+    // Check if trend exists
+    const trend = db.prepare('SELECT * FROM trends WHERE id = ?').get(trendId) as TrendRecord | undefined;
+    if (!trend) {
+      return res.status(404).json({ error: 'Trend not found' });
+    }
+    
+    // Restore signals to pending status (unassigned)
+    const updateResult = db.prepare(`
+      UPDATE signals 
+      SET trend_id = NULL, status = 'unassigned', updated_at = CURRENT_TIMESTAMP 
+      WHERE trend_id = ?
+    `).run(trendId);
+    
+    // Archive the trend instead of deleting it
+    db.prepare('UPDATE trends SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run('archived', trendId);
+    
+    const archivedTrend = db.prepare('SELECT * FROM trends WHERE id = ?').get(trendId) as TrendRecord;
+    
+    res.json({
+      trend: {
+        id: archivedTrend.id,
+        title: archivedTrend.title,
+        summary: archivedTrend.summary,
+        note: archivedTrend.note,
+        signalCount: archivedTrend.signal_count,
+        status: archivedTrend.status,
+        createdAt: archivedTrend.created_at
+      },
+      signalsRestored: updateResult.changes
+    });
+  } finally {
+    closeDatabase(projectId);
+  }
+});
+
 router.delete('/:trendId', (req: AuthRequest, res: Response) => {
   const { projectId, trendId } = req.params;
   

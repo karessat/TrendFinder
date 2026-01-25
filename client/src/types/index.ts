@@ -122,7 +122,7 @@ export interface UpdateSignalRequest {
 
 export interface Trend {
   id: string;
-  title: string | null;
+  title: string;
   summary: string;
   note: string | null;
   signalCount: number;
@@ -149,7 +149,7 @@ export interface CreateTrendRequest {
 }
 
 export interface UpdateTrendRequest {
-  title?: string | null;
+  title?: string;
   summary?: string;
   status?: 'draft' | 'final' | 'retired' | 'archived';
   note?: string | null;

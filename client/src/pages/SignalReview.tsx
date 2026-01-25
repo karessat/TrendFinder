@@ -1,11 +1,12 @@
-import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useSignals } from '../hooks/useSignals';
 import { useTrends } from '../hooks/useTrends';
 import { useProcessingStatus } from '../hooks/useProcessingStatus';
 import { trendsApi } from '../services/api';
 import { SimilarSignalsList } from '../components/signals/SimilarSignalsList';
 import { ArchiveSignalModal } from '../components/signals/ArchiveSignalModal';
+import { ConfirmTrendCreationModal } from '../components/signals/ConfirmTrendCreationModal';
 import { TrendEditModal } from '../components/trends/TrendEditModal';
 import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
@@ -22,6 +23,8 @@ export default function SignalReview() {
   const [isCreatingTrend, setIsCreatingTrend] = useState(false);
   const [archivingSignal, setArchivingSignal] = useState<Signal | null>(null);
   const [editingTrend, setEditingTrend] = useState<Trend | null>(null);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const hasLoadedInitialSignal = useRef(false);
 
   const {
     nextUnassigned,
@@ -69,9 +72,14 @@ export default function SignalReview() {
     return false;
   };
 
-  // Load next unassigned signal when ready
+  // Reset the loaded flag when project changes
   useEffect(() => {
-    if (projectId && processingStatus && !processingStatusLoading) {
+    hasLoadedInitialSignal.current = false;
+  }, [projectId]);
+
+  // Load next unassigned signal when ready (only once when processing completes)
+  useEffect(() => {
+    if (projectId && processingStatus && !processingStatusLoading && !hasLoadedInitialSignal.current && !nextUnassigned) {
       // Check if processing is complete
       let isComplete = processingStatus.status === 'complete' || processingStatus.status === 'error';
       if (!isComplete && processingStatus.totalSignals > 0) {
@@ -82,11 +90,12 @@ export default function SignalReview() {
       }
       
       if (isComplete) {
-        console.log('SignalReview - projectId from useParams:', projectId, 'Length:', projectId.length);
+        console.log('SignalReview - Loading next unassigned signal');
+        hasLoadedInitialSignal.current = true;
         loadNextUnassigned();
       }
     }
-  }, [projectId, processingStatus, processingStatusLoading, loadNextUnassigned]);
+  }, [projectId, processingStatus, processingStatusLoading, nextUnassigned, loadNextUnassigned]);
 
   // Redirect if processing is not complete
   useEffect(() => {
@@ -130,40 +139,32 @@ export default function SignalReview() {
     );
   }
 
-  const handleCreateTrend = async () => {
-    if (!nextUnassigned?.signal || selectedSignalIds.length === 0) return;
+  const handleCreateTrendClick = () => {
+    if (!nextUnassigned?.signal) return;
+    // Open confirmation modal instead of immediately creating
+    setShowConfirmModal(true);
+  };
+
+  const handleConfirmCreateTrend = async () => {
+    if (!nextUnassigned?.signal) return;
 
     setIsCreatingTrend(true);
     try {
+      // Prepare signal IDs: current signal + selected similar signals
       const allSignalIds = [nextUnassigned.signal.id, ...selectedSignalIds];
       const trend = await createTrend({ signalIds: allSignalIds });
       if (trend) {
         setSelectedSignalIds([]);
         setIsCreatingTrend(false);
+        setShowConfirmModal(false);
         // Open the edit modal with the newly created trend
         setEditingTrend(trend);
       }
     } catch (err) {
       console.error('Failed to create trend:', err);
       setIsCreatingTrend(false);
-    }
-  };
-
-  const handleCreateSingleSignalTrend = async () => {
-    if (!nextUnassigned?.signal) return;
-
-    setIsCreatingTrend(true);
-    try {
-      const trend = await createTrend({ signalIds: [nextUnassigned.signal.id] });
-      if (trend) {
-        setSelectedSignalIds([]);
-        setIsCreatingTrend(false);
-        // Open the edit modal with the newly created trend
-        setEditingTrend(trend);
-      }
-    } catch (err) {
-      console.error('Failed to create single-signal trend:', err);
-      setIsCreatingTrend(false);
+      // Keep modal open on error so user can retry
+      throw err; // Re-throw to let modal handle error display
     }
   };
 
@@ -183,7 +184,7 @@ export default function SignalReview() {
       // Update the editing trend with the new title and summary
       setEditingTrend({ 
         ...editingTrend, 
-        title: response.data.trend.title || null,
+        title: response.data.trend.title,
         summary: response.data.trend.summary 
       });
       // Also call the hook to keep the trends list in sync (but it will make another API call)
@@ -197,13 +198,29 @@ export default function SignalReview() {
 
   const handleCloseTrendModal = () => {
     setEditingTrend(null);
-    // After closing, load the next unassigned signal
-    loadNextUnassigned();
+    // Don't load next signal - stay on current signal when cancelling
   };
 
-  const handleSkip = () => {
+  const handleSkip = async () => {
+    if (!nextUnassigned?.signal) {
+      console.warn('No signal to skip');
+      return;
+    }
+    
+    const currentSignalId = nextUnassigned.signal.id;
     setSelectedSignalIds([]);
-    loadNextUnassigned();
+    try {
+      console.log('Skipping signal:', currentSignalId);
+      // Pass the current signal ID to exclude it, so we get the next one
+      await loadNextUnassigned(currentSignalId);
+      console.log('Skip completed, new signal loaded');
+    } catch (err) {
+      console.error('Failed to skip signal:', err);
+      // Show error to user
+      if (signalsError) {
+        // Error will be displayed by ErrorMessage component
+      }
+    }
   };
 
   const handleArchive = () => {
@@ -213,11 +230,33 @@ export default function SignalReview() {
   };
 
   const handleArchiveConfirm = async (note: string) => {
-    if (archivingSignal) {
-      await updateSignal(archivingSignal.id, { status: 'Archived', note });
+    if (!archivingSignal) {
+      console.error('No signal to archive');
+      return;
+    }
+    
+    try {
+      // Clear selections first
+      setSelectedSignalIds([]);
+      const signalIdToArchive = archivingSignal.id;
       setArchivingSignal(null);
+      
+      // Update the signal status to archived
+      const success = await updateSignal(signalIdToArchive, { status: 'Archived', note });
+      if (!success) {
+        throw new Error('Failed to update signal status');
+      }
+      
+      // Clear the current signal from state since it's now archived
+      // The updateSignal hook might have updated nextUnassigned with the archived signal,
+      // so we need to clear it and load the next one
       // Archive will remove the signal from unassigned, so load the next one
-      loadNextUnassigned();
+      // The backend query only returns signals with status = 'unassigned',
+      // so archived signals won't appear
+      await loadNextUnassigned();
+    } catch (err) {
+      console.error('Failed to archive signal:', err);
+      throw err; // Re-throw so modal can display error
     }
   };
 
@@ -236,7 +275,7 @@ export default function SignalReview() {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
           <Spinner size="lg" className="mx-auto mb-4" />
-          <p className="text-gray-600">Loading signals...</p>
+          <p className="text-gray-600">Loading scan hits...</p>
         </div>
       </div>
     );
@@ -249,15 +288,15 @@ export default function SignalReview() {
           <div className="mb-6">
             <button
               onClick={() => navigate(`/projects/${projectId}`)}
-              className="text-blue-600 hover:text-blue-800 text-sm mb-2 inline-block"
+              className="text-blue-600 hover:text-blue-800 text-lg font-semibold mb-2 inline-block"
             >
               ← Back to Dashboard
             </button>
-            <h1 className="text-3xl font-bold text-gray-900">Signal Review</h1>
+            <h1 className="text-3xl font-bold text-gray-900">Review Scan Hits</h1>
           </div>
           <EmptyState
-            title="All signals reviewed!"
-            message={`You've reviewed all ${nextUnassigned?.remainingCount || 0} unassigned signals.`}
+            title="All scan hits reviewed!"
+            message={`You've reviewed all ${nextUnassigned?.remainingCount || 0} unassigned scan hits.`}
             action={{
               label: 'View Trends',
               onClick: () => navigate(`/projects/${projectId}/trends`)
@@ -274,9 +313,9 @@ export default function SignalReview() {
         <div className="mb-6">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Signal Review</h1>
+              <h1 className="text-3xl font-bold text-gray-900">Review Scan Hits</h1>
               <p className="mt-2 text-gray-600">
-                {nextUnassigned.remainingCount} signals remaining
+                {nextUnassigned.remainingCount} scan hits remaining
               </p>
             </div>
             <div className="flex gap-2">
@@ -292,27 +331,23 @@ export default function SignalReview() {
                   variant="outline"
                   onClick={handleArchive}
                   disabled={isCreatingTrend}
-                  title="Archive this signal"
+                  title="Archive this scan hit"
                 >
-                  Archive Signal
+                  Archive Scan Hit
                 </Button>
               )}
               <Button
-                variant="secondary"
-                onClick={handleCreateSingleSignalTrend}
+                variant="primary"
+                onClick={handleCreateTrendClick}
                 isLoading={isCreatingTrend || trendsLoading}
                 disabled={isCreatingTrend}
-                title="Create a trend with just this signal"
+                title={selectedSignalIds.length === 0 
+                  ? 'Create a trend with this scan hit' 
+                  : `Create a trend with ${selectedSignalIds.length + 1} scan hits`}
               >
-                Create Single-Signal Trend
-              </Button>
-              <Button
-                variant="primary"
-                onClick={handleCreateTrend}
-                isLoading={isCreatingTrend || trendsLoading}
-                disabled={selectedSignalIds.length === 0}
-              >
-                Create Trend ({selectedSignalIds.length + 1} signals)
+                {selectedSignalIds.length === 0 
+                  ? 'Create Trend' 
+                  : `Create Trend (${selectedSignalIds.length + 1} scan hits)`}
               </Button>
             </div>
           </div>
@@ -327,7 +362,7 @@ export default function SignalReview() {
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card title="Current Signal">
+          <Card title="Current Scan Hit">
             <div className="space-y-4">
               {/* Status Badge */}
               <div className="flex items-center gap-2">
@@ -335,9 +370,13 @@ export default function SignalReview() {
                   {nextUnassigned.signal.status}
                 </span>
                 {nextUnassigned.signal.trendId && (
-                  <span className="text-xs text-gray-500">
+                  <Link
+                    to={`/projects/${projectId}/trends/${nextUnassigned.signal.trendId}`}
+                    className="text-xs text-blue-600 hover:text-blue-800 hover:underline font-medium"
+                    title="View trend"
+                  >
                     In trend: {nextUnassigned.signal.trendId.substring(0, 8)}...
-                  </span>
+                  </Link>
                 )}
               </div>
 
@@ -396,13 +435,13 @@ export default function SignalReview() {
               {/* Signal ID */}
               <div className="border-t pt-4">
                 <div className="text-xs text-gray-500">
-                  <strong>Signal ID:</strong> {nextUnassigned.signal.id}
+                  <strong>Scan Hit ID:</strong> {nextUnassigned.signal.id}
                 </div>
               </div>
 
               {/* Instructions */}
               <div className="border-t pt-4 text-sm text-gray-600">
-                Select similar signals below (including already-reviewed ones) to group them into a trend.
+                Select similar scan hits to the right (including already-reviewed ones) to group them into a trend.
               </div>
             </div>
           </Card>
@@ -413,8 +452,25 @@ export default function SignalReview() {
               selectedIds={selectedSignalIds}
               onSelectionChange={setSelectedSignalIds}
               showAssigned={true}
+              projectId={projectId || ''}
             />
           </Card>
+        </div>
+
+        {/* Bottom Navigation */}
+        <div className="mt-8 pt-6 border-t border-gray-200 flex items-center justify-between">
+          <button
+            onClick={() => navigate(`/projects/${projectId}/trends`)}
+            className="text-blue-600 hover:text-blue-800 font-medium transition-colors"
+          >
+            View Previous Trends →
+          </button>
+          <button
+            onClick={() => navigate(`/projects/${projectId}`)}
+            className="text-blue-600 hover:text-blue-800 text-lg font-semibold transition-colors"
+          >
+            ← Back to Dashboard
+          </button>
         </div>
 
         <ArchiveSignalModal
@@ -423,6 +479,19 @@ export default function SignalReview() {
           onClose={() => setArchivingSignal(null)}
           onArchive={handleArchiveConfirm}
         />
+
+        {nextUnassigned?.signal && (
+          <ConfirmTrendCreationModal
+            isOpen={showConfirmModal}
+            onClose={() => setShowConfirmModal(false)}
+            currentSignal={nextUnassigned.signal}
+            selectedSimilarSignals={nextUnassigned.similarSignals.filter(s => 
+              selectedSignalIds.includes(s.id)
+            )}
+            onConfirm={handleConfirmCreateTrend}
+            isCreating={isCreatingTrend}
+          />
+        )}
 
         <TrendEditModal
           trend={editingTrend}

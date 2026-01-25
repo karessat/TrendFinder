@@ -40,6 +40,12 @@ export function Modal({ isOpen, onClose, title, children, size = 'md' }: ModalPr
     <div
       className="fixed inset-0 z-50 overflow-y-auto"
       onClick={onClose}
+      onMouseDown={(e) => {
+        // Only close if clicking directly on the backdrop, not on child elements
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
     >
       <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
         <div className="fixed inset-0 transition-opacity bg-gray-500 bg-opacity-75" aria-hidden="true"></div>
@@ -49,6 +55,7 @@ export function Modal({ isOpen, onClose, title, children, size = 'md' }: ModalPr
         <div
           className={`inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle ${sizeClasses[size]} w-full`}
           onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
         >
           {title && (
             <div className="flex items-center justify-between px-6 py-4 border-b">

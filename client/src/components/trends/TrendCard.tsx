@@ -7,18 +7,20 @@ interface TrendCardProps {
   onEdit?: (trend: Trend) => void;
   onDelete?: (id: string) => void;
   onRetire?: (trend: Trend) => void;
+  onUndo?: (id: string) => Promise<void>;
+  onViewSignals?: (id: string) => Promise<void>;
 }
 
 /**
  * Get trend title, falling back to extracted title if not available
  */
-function getTrendTitle(trend: { title: string | null; summary: string }): string {
-  // Use generated title if available
+function getTrendTitle(trend: { title: string; summary: string }): string {
+  // Use generated title (title is now required, but keep check for safety)
   if (trend.title && trend.title.trim()) {
     return trend.title;
   }
   
-  // Fallback: extract from summary (for old trends without titles)
+  // Fallback: extract from summary (should not happen with required titles)
   const cleaned = trend.summary
     .replace(/^(The|This|These|A|An)\s+/i, '')
     .replace(/[.,;:!?]+$/, '')
@@ -31,7 +33,7 @@ function getTrendTitle(trend: { title: string | null; summary: string }): string
   return title.charAt(0).toUpperCase() + title.slice(1);
 }
 
-export function TrendCard({ trend, projectId, onEdit, onDelete, onRetire }: TrendCardProps) {
+export function TrendCard({ trend, projectId, onEdit, onDelete, onRetire, onUndo, onViewSignals }: TrendCardProps) {
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'final':
@@ -49,12 +51,23 @@ export function TrendCard({ trend, projectId, onEdit, onDelete, onRetire }: Tren
     <div className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
       <div className="flex items-start justify-between">
         <div className="flex-1">
-          <Link
-            to={`/projects/${projectId}/trends/${trend.id}`}
-            className="text-lg font-semibold text-gray-900 hover:text-blue-600 transition-colors block mb-2"
-          >
-            {getTrendTitle(trend)}
-          </Link>
+          <div className="flex items-center gap-2 mb-2">
+            <Link
+              to={`/projects/${projectId}/trends/${trend.id}`}
+              className="text-lg font-semibold text-gray-900 hover:text-blue-600 transition-colors"
+            >
+              {getTrendTitle(trend)}
+            </Link>
+            {onViewSignals && (
+              <button
+                onClick={() => onViewSignals(trend.id)}
+                className="text-xs text-blue-600 hover:text-blue-800 underline"
+                title="View signals in this trend"
+              >
+                ({trend.signalCount} signals)
+              </button>
+            )}
+          </div>
           <p className="text-gray-700 mb-3 line-clamp-3">{trend.summary}</p>
           {trend.note && (
             <div className="mb-2 p-2 bg-gray-50 rounded text-xs text-gray-600">
@@ -71,7 +84,7 @@ export function TrendCard({ trend, projectId, onEdit, onDelete, onRetire }: Tren
             </span>
           </div>
         </div>
-        {(onEdit || onDelete || onRetire) && (
+        {(onEdit || onDelete || onRetire || onUndo) && (
           <div className="flex items-center gap-2 ml-4">
             {onEdit && trend.status !== 'retired' && trend.status !== 'archived' && (
               <button
@@ -81,6 +94,17 @@ export function TrendCard({ trend, projectId, onEdit, onDelete, onRetire }: Tren
               >
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                </svg>
+              </button>
+            )}
+            {onUndo && trend.status !== 'retired' && trend.status !== 'archived' && (
+              <button
+                onClick={() => onUndo(trend.id)}
+                className="text-gray-400 hover:text-orange-600 focus:outline-none"
+                title="Undo trend creation - restore signals to pending and archive trend"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
                 </svg>
               </button>
             )}

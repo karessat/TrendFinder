@@ -8,11 +8,11 @@ export function useTrends(projectId: string) {
   const [error, setError] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
 
-  const loadTrends = useCallback(async () => {
+  const loadTrends = useCallback(async (includeArchived: boolean = false) => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await trendsApi.list(projectId);
+      const response = await trendsApi.list(projectId, includeArchived);
       setTrends(response.data.trends);
       setTotal(response.data.total);
     } catch (err) {
@@ -81,12 +81,30 @@ export function useTrends(projectId: string) {
       const response = await trendsApi.regenerateSummary(projectId, trendId);
       setTrends(prev => prev.map(t => t.id === trendId ? { 
         ...t, 
-        title: response.data.trend.title || null,
+        title: response.data.trend.title,
         summary: response.data.trend.summary 
       } : t));
       return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to regenerate summary';
+      setError(message);
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  }, [projectId]);
+
+  const undoTrend = useCallback(async (trendId: string): Promise<boolean> => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      await trendsApi.undo(projectId, trendId);
+      // Remove from list since it's now archived and filtered out
+      setTrends(prev => prev.filter(t => t.id !== trendId));
+      setTotal(prev => prev - 1);
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to undo trend';
       setError(message);
       return false;
     } finally {
@@ -103,6 +121,7 @@ export function useTrends(projectId: string) {
     createTrend,
     updateTrend,
     deleteTrend,
+    undoTrend,
     regenerateSummary
   };
 }

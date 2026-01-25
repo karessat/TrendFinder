@@ -135,10 +135,13 @@ export const signalsApi = {
   list: (projectId: string, params?: { status?: string; limit?: number; offset?: number }) =>
     api.get<SignalListResponse>(`/projects/${encodeURIComponent(projectId)}/signals`, { params }),
   
-  getNextUnassigned: (projectId: string) => {
+  getNextUnassigned: (projectId: string, excludeSignalId?: string) => {
     const encoded = encodeURIComponent(projectId);
-    console.log('API call - Original projectId:', projectId, 'Encoded:', encoded, 'Length:', projectId.length);
-    return api.get<NextUnassignedResponse>(`/projects/${encoded}/signals/next-unassigned`);
+    const params = excludeSignalId ? { excludeSignalId } : undefined;
+    console.log('API call - Original projectId:', projectId, 'Encoded:', encoded, 'Length:', projectId.length, 'ExcludeSignalId:', excludeSignalId);
+    const url = `/projects/${encoded}/signals/next-unassigned`;
+    console.log('Full URL will be:', url, 'with params:', params);
+    return api.get<NextUnassignedResponse>(url, { params });
   },
   
   get: (projectId: string, signalId: string) =>
@@ -156,8 +159,8 @@ export const signalsApi = {
 
 // Trends
 export const trendsApi = {
-  list: (projectId: string) =>
-    api.get<TrendListResponse>(`/projects/${encodeURIComponent(projectId)}/trends`),
+  list: (projectId: string, includeArchived: boolean = false) =>
+    api.get<TrendListResponse>(`/projects/${encodeURIComponent(projectId)}/trends${includeArchived ? '?includeArchived=true' : ''}`),
   
   get: (projectId: string, trendId: string) =>
     api.get<TrendDetailResponse>(`/projects/${encodeURIComponent(projectId)}/trends/${encodeURIComponent(trendId)}`),
@@ -170,6 +173,9 @@ export const trendsApi = {
   
   delete: (projectId: string, trendId: string) =>
     api.delete(`/projects/${encodeURIComponent(projectId)}/trends/${encodeURIComponent(trendId)}`),
+  
+  undo: (projectId: string, trendId: string) =>
+    api.post<TrendResponse>(`/projects/${encodeURIComponent(projectId)}/trends/${encodeURIComponent(trendId)}/undo`),
   
   regenerateSummary: (projectId: string, trendId: string) =>
     api.post<TrendResponse>(`/projects/${encodeURIComponent(projectId)}/trends/${encodeURIComponent(trendId)}/regenerate-summary`),

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useProjects } from '../hooks/useProjects';
 import { useProcessingStatus } from '../hooks/useProcessingStatus';
+import { useSignals } from '../hooks/useSignals';
 import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
 import { ProgressBar } from '../components/common/ProgressBar';
@@ -21,10 +22,29 @@ export default function ProjectDashboard() {
   // Determine which project to show: use URL param if present, otherwise use first project
   const effectiveProjectId = urlProjectId || (projects.length > 0 ? projects[0].id : null);
   const { status, loadStatus: reloadStatus } = useProcessingStatus(effectiveProjectId || '', !!effectiveProjectId);
+  const { unassignedCount, loadSignals } = useSignals(effectiveProjectId || '');
   const [isClearDialogOpen, setIsClearDialogOpen] = useState(false);
   const [isProcessingAlertOpen, setIsProcessingAlertOpen] = useState(false);
+  const [isProcessingProgressExpanded, setIsProcessingProgressExpanded] = useState(false);
 
   const project = effectiveProjectId ? projects.find(p => p.id === effectiveProjectId) : null;
+  
+  // Load signals to get unassigned count when processing is complete
+  useEffect(() => {
+    if (effectiveProjectId) {
+      // Check if processing is complete
+      const allPhasesComplete = status && status.totalSignals > 0 && 
+        status.embeddingsComplete >= status.totalSignals &&
+        status.embeddingSimilaritiesComplete >= status.totalSignals &&
+        status.claudeVerificationsComplete >= status.totalSignals;
+      
+      const isComplete = !status || status.status === 'complete' || status.status === 'error' || allPhasesComplete;
+      
+      if (isComplete) {
+        loadSignals();
+      }
+    }
+  }, [effectiveProjectId, status, loadSignals]);
   
   // If no projectId in URL and we have projects, redirect to first project's dashboard
   useEffect(() => {
@@ -155,6 +175,35 @@ export default function ProjectDashboard() {
     }
   };
 
+  // Get display status - show "Complete" if all phases are done, even if status field says otherwise
+  const getDisplayStatus = () => {
+    if (!status) {
+      return project.processingStatus || 'Pending';
+    }
+    
+    // Check if all phases are complete
+    if (status.totalSignals > 0) {
+      const allEmbeddingsDone = status.embeddingsComplete >= status.totalSignals;
+      const allSimilaritiesDone = status.embeddingSimilaritiesComplete >= status.totalSignals;
+      const allVerificationsDone = status.claudeVerificationsComplete >= status.totalSignals;
+      
+      if (allEmbeddingsDone && allSimilaritiesDone && allVerificationsDone) {
+        return 'Complete';
+      }
+    }
+    
+    // Otherwise use the actual status
+    if (status.status === 'complete' || status.status === 'error') {
+      return status.status === 'complete' ? 'Complete' : 'Error';
+    }
+    
+    // Format status for display (replace underscores with spaces, capitalize)
+    return status.status
+      .split('_')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+  };
+
   return (
     <Layout>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -168,38 +217,89 @@ export default function ProjectDashboard() {
             <div className="text-3xl font-bold text-gray-900">{project.signalCount}</div>
           </Card>
           <Card>
+            <div className="text-sm text-gray-600 mb-1">Unprocessed Scan Hits</div>
+            <div className="text-3xl font-bold text-gray-900">{unassignedCount}</div>
+          </Card>
+          <Card>
             <div className="text-sm text-gray-600 mb-1">Total Trends</div>
             <div className="text-3xl font-bold text-gray-900">{project.trendCount}</div>
           </Card>
-          <Card>
-            <div className="text-sm text-gray-600 mb-1">Processing Status</div>
-            <div className="text-lg font-semibold text-gray-900 capitalize">{project.processingStatus}</div>
-          </Card>
         </div>
 
-        {status && status.status !== 'complete' && status.status !== 'error' && (
-          <Card title="Processing Progress" className="mb-6">
-            <ProgressBar
-              value={status.percentComplete}
-              showPercentage={true}
-              color={getStatusColor(status.status)}
-            />
-            <div className="mt-4 grid grid-cols-3 gap-4 text-sm">
-              <div>
-                <div className="text-gray-600">Embeddings</div>
-                <div className="font-semibold">{status.embeddingsComplete} / {status.totalSignals}</div>
+        {status && (() => {
+          // Check if processing is actually complete (all phases done)
+          const allPhasesComplete = status.totalSignals > 0 && 
+            status.embeddingsComplete >= status.totalSignals &&
+            status.embeddingSimilaritiesComplete >= status.totalSignals &&
+            status.claudeVerificationsComplete >= status.totalSignals;
+          
+          // Show if processing is in progress OR if complete but user wants to see it
+          const isProcessing = !allPhasesComplete;
+          const shouldShow = isProcessing || isProcessingProgressExpanded;
+          
+          if (!shouldShow && allPhasesComplete) {
+            // Show collapsed state when complete
+            return (
+              <Card className="mb-6">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-5 h-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span className="text-sm font-medium text-gray-700">Processing Complete</span>
+                  </div>
+                  <button
+                    onClick={() => setIsProcessingProgressExpanded(true)}
+                    className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+                  >
+                    Show Details
+                  </button>
+                </div>
+              </Card>
+            );
+          }
+          
+          if (!shouldShow) {
+            return null;
+          }
+          
+          return (
+            <Card 
+              title="Processing Progress" 
+              className="mb-6"
+              actions={
+                allPhasesComplete ? (
+                  <button
+                    onClick={() => setIsProcessingProgressExpanded(false)}
+                    className="text-sm text-gray-600 hover:text-gray-800 font-medium"
+                  >
+                    Hide
+                  </button>
+                ) : undefined
+              }
+            >
+              <ProgressBar
+                value={status.percentComplete}
+                showPercentage={true}
+                color={getStatusColor(status.status)}
+              />
+              <div className="mt-4 grid grid-cols-3 gap-4 text-sm">
+                <div>
+                  <div className="text-gray-600">Embeddings</div>
+                  <div className="font-semibold">{status.embeddingsComplete} / {status.totalSignals}</div>
+                </div>
+                <div>
+                  <div className="text-gray-600">Similarities</div>
+                  <div className="font-semibold">{status.embeddingSimilaritiesComplete} / {status.totalSignals}</div>
+                </div>
+                <div>
+                  <div className="text-gray-600">Claude Verification</div>
+                  <div className="font-semibold">{status.claudeVerificationsComplete} / {status.totalSignals}</div>
+                </div>
               </div>
-              <div>
-                <div className="text-gray-600">Similarities</div>
-                <div className="font-semibold">{status.embeddingSimilaritiesComplete} / {status.totalSignals}</div>
-              </div>
-              <div>
-                <div className="text-gray-600">Claude Verification</div>
-                <div className="font-semibold">{status.claudeVerificationsComplete} / {status.totalSignals}</div>
-              </div>
-            </div>
-          </Card>
-        )}
+            </Card>
+          );
+        })()}
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           <Card title="Upload Data">
@@ -219,9 +319,9 @@ export default function ProjectDashboard() {
             )}
           </Card>
 
-          <Card title="Review Signals">
+          <Card title="Review Scan Hits">
             <p className="text-sm text-gray-600 mb-4">
-              Review unassigned signals and group similar ones into trends.
+              Review unassigned scan hits and group similar ones into trends.
             </p>
             {!isProcessingComplete() && status && (
               <div className="mb-3 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
@@ -242,10 +342,10 @@ export default function ProjectDashboard() {
                 className="w-full" 
                 disabled={true}
                 title={!isProcessingComplete() && status 
-                  ? `Processing is ${status.percentComplete}% complete. Please wait until processing finishes before reviewing signals.` 
+                  ? `Processing is ${status.percentComplete}% complete. Please wait until processing finishes before reviewing scan hits.` 
                   : project.signalCount === 0 
-                    ? 'No signals available. Upload a spreadsheet first.' 
-                    : 'Start reviewing and grouping signals into trends'}
+                    ? 'No scan hits available. Upload a spreadsheet first.' 
+                    : 'Start reviewing and grouping scan hits into trends'}
                 onClick={handleReviewClick}
               >
                 {!isProcessingComplete() ? (
@@ -337,7 +437,7 @@ export default function ProjectDashboard() {
                 </div>
                 <div className="ml-3">
                   <p className="text-sm font-medium text-yellow-800">
-                    Signal processing is still running. Please wait until processing completes before reviewing signals.
+                    Signal processing is still running. Please wait until processing completes before reviewing scan hits.
                   </p>
                 </div>
               </div>
@@ -373,7 +473,7 @@ export default function ProjectDashboard() {
             
             <div className="bg-blue-50 border-l-4 border-blue-400 p-4 rounded">
               <p className="text-sm text-blue-800">
-                <strong>Tip:</strong> You can check back on the dashboard to see when processing is complete. The "Review Signals" button will be enabled automatically.
+                <strong>Tip:</strong> You can check back on the dashboard to see when processing is complete. The "Review Scan Hits" button will be enabled automatically.
               </p>
             </div>
             

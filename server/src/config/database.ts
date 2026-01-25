@@ -109,8 +109,17 @@ function migrateDatabase(db: Database.Database, projectId: string): void {
     const trendsColumnNames = trendsTableInfo.map(col => col.name.toLowerCase());
     
     if (!trendsColumnNames.includes('title')) {
-      db.exec(`ALTER TABLE trends ADD COLUMN title TEXT`);
+      db.exec(`ALTER TABLE trends ADD COLUMN title TEXT NOT NULL DEFAULT 'Trend'`);
       logger.info({ projectId, column: 'title', table: 'trends' }, 'Added title column to trends table');
+    } else {
+      // Make title required for existing databases (set default for NULL values)
+      const nullTitles = db.prepare('SELECT COUNT(*) as count FROM trends WHERE title IS NULL').get() as { count: number };
+      if (nullTitles.count > 0) {
+        db.exec(`UPDATE trends SET title = 'Trend' WHERE title IS NULL`);
+        logger.info({ projectId, updated: nullTitles.count }, 'Updated NULL titles to default value');
+      }
+      // Note: SQLite doesn't support ALTER COLUMN to change NULL to NOT NULL
+      // We'll enforce this at the application level instead
     }
     
     if (!trendsColumnNames.includes('note')) {

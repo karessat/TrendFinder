@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { SimilarSignal } from '../../types';
 
 interface SimilarSignalsListProps {
@@ -6,22 +7,62 @@ interface SimilarSignalsListProps {
   selectedIds: string[];
   onSelectionChange: (ids: string[]) => void;
   showAssigned?: boolean;
+  projectId: string;
 }
 
 export function SimilarSignalsList({
   signals,
   selectedIds,
   onSelectionChange,
-  showAssigned = true // Default to showing all signals including assigned ones
+  showAssigned = true, // Default to showing all signals including assigned ones
+  projectId
 }: SimilarSignalsListProps) {
   const [showAssignedSignals, setShowAssignedSignals] = useState(showAssigned);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const scrollPositionRef = useRef<number>(0);
+  const signalsIdsRef = useRef<string>('');
 
-  const filteredSignals = showAssignedSignals
-    ? signals
-    : signals.filter(s => s.status === 'Pending');
+  // Memoize filtered and sorted signals to prevent unnecessary recalculations
+  const filteredSignals = useMemo(() => {
+    return showAssignedSignals
+      ? signals
+      : signals.filter(s => s.status === 'Pending');
+  }, [signals, showAssignedSignals]);
 
   // Sort by score in descending order (highest similarity first)
-  const sortedSignals = [...filteredSignals].sort((a, b) => b.score - a.score);
+  const sortedSignals = useMemo(() => {
+    return [...filteredSignals].sort((a, b) => b.score - a.score);
+  }, [filteredSignals]);
+
+  // Preserve scroll position when component re-renders (only if signals haven't changed)
+  const currentSignalsIds = sortedSignals.map(s => s.id).join(',');
+  const signalsChanged = signalsIdsRef.current !== currentSignalsIds;
+
+  useEffect(() => {
+    if (signalsChanged) {
+      // Reset scroll position if signals changed
+      scrollPositionRef.current = 0;
+      signalsIdsRef.current = currentSignalsIds;
+      if (scrollContainerRef.current) {
+        scrollContainerRef.current.scrollTop = 0;
+      }
+    } else {
+      // Restore scroll position after DOM updates, only if signals haven't changed
+      requestAnimationFrame(() => {
+        const container = scrollContainerRef.current;
+        if (container && scrollPositionRef.current !== container.scrollTop) {
+          container.scrollTop = scrollPositionRef.current;
+        }
+      });
+    }
+  });
+
+  // Save scroll position as user scrolls
+  const handleScroll = () => {
+    if (scrollContainerRef.current) {
+      scrollPositionRef.current = scrollContainerRef.current.scrollTop;
+    }
+  };
 
   // Claude scores are on a 1-10 scale, convert to percentage (10 = 100%)
   const scoreToPercent = (score: number): number => {
@@ -48,7 +89,7 @@ export function SimilarSignalsList({
   if (signals.length === 0) {
     return (
       <div className="text-center py-8 text-gray-500">
-        No similar signals found
+        No similar scan hits found
       </div>
     );
   }
@@ -57,7 +98,7 @@ export function SimilarSignalsList({
     <div>
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold text-gray-900">
-          Similar Signals ({filteredSignals.length})
+          Similar Scan Hits ({filteredSignals.length})
         </h3>
         <label className="flex items-center text-sm text-gray-600">
           <input
@@ -66,11 +107,15 @@ export function SimilarSignalsList({
             onChange={(e) => setShowAssignedSignals(e.target.checked)}
             className="mr-2 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
           />
-          Hide reviewed signals
+          Hide reviewed scan hits
         </label>
       </div>
 
-      <div className="space-y-2 max-h-96 overflow-y-auto">
+      <div 
+        ref={scrollContainerRef}
+        className="space-y-2 max-h-[calc(100vh-300px)] overflow-y-auto"
+        onScroll={handleScroll}
+      >
         {sortedSignals.map((signal) => (
           <div
             key={signal.id}
@@ -101,10 +146,18 @@ export function SimilarSignalsList({
                   }`}>
                     {signal.status}
                   </span>
-                  {signal.trendSummary && (
-                    <span className="text-xs text-gray-500">
-                      Trend: {signal.trendSummary.substring(0, 50)}...
-                    </span>
+                  {(signal.trendId || signal.trendSummary) && (
+                    <Link
+                      to={`/projects/${projectId}/trends/${signal.trendId}`}
+                      className="text-xs text-blue-600 hover:text-blue-800 hover:underline font-medium"
+                      title={signal.trendSummary ? `View trend: ${signal.trendSummary}` : 'View trend'}
+                      onClick={(e) => e.stopPropagation()} // Prevent checkbox toggle when clicking link
+                    >
+                      {signal.trendSummary 
+                        ? `Trend: ${signal.trendSummary.substring(0, 50)}${signal.trendSummary.length > 50 ? '...' : ''}`
+                        : `In trend: ${signal.trendId?.substring(0, 8)}...`
+                      }
+                    </Link>
                   )}
                 </div>
                 {signal.title && (

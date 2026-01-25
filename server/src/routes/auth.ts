@@ -12,6 +12,7 @@ import {
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import { logger } from '../config/logger';
 import { sendPasswordResetEmail } from '../services/emailService';
+import { getEnv } from '../config/env';
 
 const router = Router();
 
@@ -151,17 +152,34 @@ const forgotPasswordSchema = z.object({
 router.post('/forgot-password', async (req, res: Response) => {
   try {
     const validated = forgotPasswordSchema.parse(req.body);
+    const env = getEnv();
+    const isDevelopment = env.NODE_ENV !== 'production';
     
     // Find user by email
     const user = getUserByEmail(validated.email);
     
     // Always return success (don't reveal if email exists)
     // This prevents email enumeration attacks
+    let resetLink: string | undefined;
+    
     if (user) {
       try {
         const resetToken = await createPasswordResetToken(user.id);
-        await sendPasswordResetEmail(user.email, resetToken, req.body.resetUrl);
+        // Use origin from request (where the frontend is actually running), fallback to env var, then default
+        const requestOrigin = req.headers.origin;
+        const envFrontendUrl = process.env.FRONTEND_URL;
+        const frontendUrl = requestOrigin || envFrontendUrl || 'http://localhost:5174';
+        resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
+        await sendPasswordResetEmail(user.email, resetToken, req.body.resetUrl || resetLink);
         logger.info({ userId: user.id, email: user.email }, 'Password reset email sent');
+        
+        // In development, log the reset link prominently
+        if (isDevelopment) {
+          logger.info('═══════════════════════════════════════════════════════════');
+          logger.info('🔗 PASSWORD RESET LINK (Development Mode):');
+          logger.info(`   ${resetLink}`);
+          logger.info('═══════════════════════════════════════════════════════════');
+        }
       } catch (error) {
         logger.error({ error, userId: user.id }, 'Failed to send password reset email');
         // Still return success to prevent email enumeration
@@ -170,10 +188,17 @@ router.post('/forgot-password', async (req, res: Response) => {
       logger.warn({ email: validated.email }, 'Password reset requested for non-existent user');
     }
     
-    // Always return the same response
-    res.json({ 
+    // In development, include reset link in response for convenience
+    const response: any = { 
       message: 'If an account with that email exists, a password reset link has been sent.' 
-    });
+    };
+    
+    if (isDevelopment && resetLink && user) {
+      response.devResetLink = resetLink;
+      response.devNote = 'Development mode: Reset link included below. Check server console for details.';
+    }
+    
+    res.json(response);
   } catch (error) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({

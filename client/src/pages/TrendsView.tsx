@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useTrends } from '../hooks/useTrends';
+import { trendsApi } from '../services/api';
 import { TrendList } from '../components/trends/TrendList';
 import { TrendEditModal } from '../components/trends/TrendEditModal';
 import { RetireTrendModal } from '../components/trends/RetireTrendModal';
@@ -20,6 +21,7 @@ export default function TrendsView() {
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [trendToDelete, setTrendToDelete] = useState<string | null>(null);
   const [retiringTrend, setRetiringTrend] = useState<Trend | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
 
   const {
     trends,
@@ -29,14 +31,15 @@ export default function TrendsView() {
     loadTrends,
     updateTrend,
     deleteTrend,
+    undoTrend,
     regenerateSummary
   } = useTrends(projectId || '');
 
   useEffect(() => {
     if (projectId) {
-      loadTrends();
+      loadTrends(showArchived);
     }
-  }, [projectId, loadTrends]);
+  }, [projectId, showArchived, loadTrends]);
 
   const handleEdit = (trend: Trend) => {
     setEditingTrend(trend);
@@ -46,14 +49,14 @@ export default function TrendsView() {
     await updateTrend(id, data);
     setEditingTrend(null);
     if (projectId) {
-      loadTrends();
+      loadTrends(showArchived);
     }
   };
 
   const handleRegenerateSummary = async (id: string) => {
     await regenerateSummary(id);
     if (projectId) {
-      loadTrends();
+      loadTrends(showArchived);
     }
   };
 
@@ -68,7 +71,7 @@ export default function TrendsView() {
       setTrendToDelete(null);
       setIsDeleteConfirmOpen(false);
       if (projectId) {
-        loadTrends();
+        loadTrends(showArchived);
       }
     }
   };
@@ -82,8 +85,36 @@ export default function TrendsView() {
       await updateTrend(retiringTrend.id, { status, note });
       setRetiringTrend(null);
       if (projectId) {
-        loadTrends();
+        loadTrends(showArchived);
       }
+    }
+  };
+
+  const handleUndo = async (id: string) => {
+    await undoTrend(id);
+    if (projectId) {
+      loadTrends(showArchived);
+    }
+  };
+
+  const handleViewSignals = async (id: string) => {
+    try {
+      console.log('Loading trend details for:', id);
+      const response = await trendsApi.get(projectId!, id);
+      console.log('Trend detail response:', response.data);
+      setTrendDetail(response.data);
+      // Scroll to the signals card after a brief delay to ensure it's rendered
+      setTimeout(() => {
+        const signalsCard = document.getElementById('trend-signals-card');
+        console.log('Looking for signals card element:', signalsCard);
+        if (signalsCard) {
+          signalsCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } else {
+          console.warn('Signals card element not found');
+        }
+      }, 200);
+    } catch (err) {
+      console.error('Failed to load trend details:', err);
     }
   };
 
@@ -113,11 +144,22 @@ export default function TrendsView() {
               <h1 className="text-3xl font-bold text-gray-900">Trends</h1>
               <p className="mt-2 text-gray-600">Total: {total} trends</p>
             </div>
-            <Link to={`/projects/${projectId}/review`}>
-              <Button variant="primary">
-                Review Signals
-              </Button>
-            </Link>
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={showArchived}
+                  onChange={(e) => setShowArchived(e.target.checked)}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span>Show archived trends</span>
+              </label>
+              <Link to={`/projects/${projectId}/review`}>
+                <Button variant="primary">
+                  Review Signals
+                </Button>
+              </Link>
+            </div>
           </div>
         </div>
 
@@ -144,35 +186,54 @@ export default function TrendsView() {
             }}
           />
         ) : (
-          <TrendList
-            trends={trends}
-            projectId={projectId}
-            onEdit={handleEdit}
-            onDelete={handleDeleteClick}
-            onRetire={handleRetire}
-          />
-        )}
-
-        {trendDetail && (
-          <Card title={trendDetail.trend.title || `Trend: ${trendDetail.trend.id.substring(0, 8)}...`} className="mt-6">
-            <div className="mb-4">
-              <h3 className="font-semibold text-gray-900 mb-2">Summary</h3>
-              <p className="text-gray-700">{trendDetail.trend.summary}</p>
-            </div>
-            <div className="mb-4">
-              <h3 className="font-semibold text-gray-900 mb-2">Signals ({trendDetail.signals.length})</h3>
-              <div className="space-y-2">
-                {trendDetail.signals.map((signal: any) => (
-                  <div key={signal.id} className="p-3 bg-gray-50 rounded">
-                    <p className="text-sm text-gray-900">{signal.originalText}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <Button variant="outline" onClick={() => setTrendDetail(null)}>
-              Close
-            </Button>
-          </Card>
+          <>
+            <TrendList
+              trends={trends}
+              projectId={projectId}
+              onEdit={handleEdit}
+              onDelete={handleDeleteClick}
+              onRetire={handleRetire}
+              onUndo={handleUndo}
+              onViewSignals={handleViewSignals}
+            />
+            
+            {trendDetail && (
+              <Card 
+                id="trend-signals-card"
+                title={trendDetail.trend?.title || 'Trend Signals'} 
+                className="mt-6"
+              >
+                <div className="mb-4">
+                  <h3 className="font-semibold text-gray-900 mb-2">Summary</h3>
+                  <p className="text-gray-700">{trendDetail.trend?.summary || 'No summary available'}</p>
+                </div>
+                <div className="mb-4">
+                  <h3 className="font-semibold text-gray-900 mb-2">
+                    Signals ({trendDetail.signals?.length || 0})
+                  </h3>
+                  {trendDetail.signals && trendDetail.signals.length > 0 ? (
+                    <div className="space-y-2 max-h-96 overflow-y-auto">
+                      {trendDetail.signals.map((signal: any) => (
+                        <div key={signal.id} className="p-3 bg-gray-50 rounded border border-gray-200">
+                          <p className="text-sm text-gray-900">{signal.originalText || signal.original_text || 'No text available'}</p>
+                          {signal.status && (
+                            <span className="text-xs text-gray-500 mt-1 block">Status: {signal.status}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-gray-500 text-sm">No signals found in this trend.</p>
+                  )}
+                </div>
+                <div className="flex justify-end">
+                  <Button variant="outline" onClick={() => setTrendDetail(null)}>
+                    Close
+                  </Button>
+                </div>
+              </Card>
+            )}
+          </>
         )}
 
         <TrendEditModal
